@@ -44,6 +44,14 @@ photo exchange → strip → download.
 | D13 | Grid = "A \| B / C \| D" | A *round* = one capture by both people = 2 photos. Grid unlocks after **2 rounds** | A grid needs 4 photos. |
 | D15 | (not specified) | **Preview = result.** A frame's preview is mirrored exactly when the photo captured from it is mirrored, on *both* sides: your own frame and the THEM frame. Each client tells the other whether its camera is mirrored over the DataChannel (`cam` message, §8). Rule: `mirrored = trackSettings.facingMode !== "environment"` (front cameras and desktop webcams mirror; the rear camera does not) | Owner request 2026-10-07 ("make the preview same as result"). Each photo in the strip then shows its person exactly as they looked in the frame you watched. |
 | D14 | RETAKE button | "RETAKE" = press ready again → a new round. Only the **last 2 rounds** are kept | Reuses the ready mechanism: zero new protocol messages, and neither person is yanked off the result screen by the other. |
+| D16 | `facingMode` toggle on mobile, device cycling on desktop | Device cycling everywhere (§8) | One code path; same behaviour. |
+| D17 | ICE restart on failure | No ICE restart; **RECONNECT = rejoin the room** (§8) | Restart needs renegotiation, which conflicts with the guest rebuilding on every offer. |
+| D18 | `pages/` + `components/` only | Adds `src/client/screens/` for presentational per-state screens; `Booth.tsx` keeps all logic | Phase 4 restyles screens without touching logic. |
+| D19 | `create()` / `status()` | `create(code)` stores the code in the record (the DO cannot rely on knowing its own name); `status(participantId \| null)` reports `full` as *false* for someone who already holds a slot; HTTP lookup passes it as the `x-participant-id` header (never a URL) | Otherwise a person reloading a full booth is told it is full. |
+| D20 | "same-origin `Origin` check" | Compare the `Origin` **host** to the request host | A TLS-terminating tunnel (cloudflared) makes the Worker see `http` while the browser sends `https`. |
+| D21 | Product name unspecified | Placeholder name **TWO-UP**, one constant `APP_NAME` in `shared/constants.ts` | Easy to rename. |
+| D22 | One Wrangler config | `wrangler.test.jsonc` (no assets block) for the Workers test pool; `wrangler.jsonc` for dev/deploy | The Vite plugin supplies `assets.directory` at build; the test pool has no build. |
+| D23 | Rate limits unspecified | Create: 20 / 60 s per IP. Lookup + ws + ice: 120 / 60 s per IP | Far above human use, far below brute-force speed. |
 
 ## 3. Verified platform facts and pinned versions
 
@@ -194,9 +202,9 @@ NTP-style, per brief §16:
 
 **ICE servers.** Before each connection build the client calls `GET /api/ice?room=CODE`. Server decides STUN vs STUN+TURN; the client treats the list as opaque, so adding TURN later needs only the two secrets (brief §18). Default STUN `stun:stun.cloudflare.com:3478`.
 
-**Connection.** `addTrack` for the local video; `ontrack` → remote `<video>`; trickle ICE over the WebSocket, with remote candidates buffered until `setRemoteDescription` resolves; `addIceCandidate` errors are caught and ignored (stale). `iceconnectionstatechange`: `disconnected` ⇒ "RECONNECTING" badge; `failed` ⇒ one `restartIce()` by the offerer, then if still not `connected` after 10 s ⇒ **WebRTC failure screen** (RECONNECT rebuilds the connection; if the WebSocket is up it does not rejoin).
+**Connection.** `addTrack` for the local video; `ontrack` → remote `<video>`; trickle ICE over the WebSocket, with remote candidates buffered until `setRemoteDescription` resolves; `addIceCandidate` errors are caught and ignored (stale). `iceconnectionstatechange`: `connected`/`completed` ⇒ connected; `disconnected` ⇒ "RECONNECTING" badge and a 10 s fail timer; `failed`, or no connection within 20 s of building the peer, ⇒ **WebRTC failure screen**. There is **no ICE restart** (it would need renegotiation on a live connection, which contradicts "the guest rebuilds on every offer"). **RECONNECT = rejoin the room** (close and reopen the WebSocket with the same `participantId`): the server replaces the socket, `a` re-offers per the triggers above, `b` rebuilds on the offer — one code path for both sides.
 
-**Camera switching.** `FLIP CAMERA`: on mobile toggles `facingMode` `user`/`environment`; on desktop cycles `enumerateDevices()` video inputs. Uses `RTCRtpSender.replaceTrack` — **no renegotiation**.
+**Camera switching.** `FLIP CAMERA` cycles the `enumerateDevices()` video inputs on every platform (phones list front and back cameras as separate devices once permission is granted); shown only when ≥ 2 inputs exist. The old tracks are stopped before the new device opens (many Android phones allow one open camera). Uses `RTCRtpSender.replaceTrack` — **no renegotiation**.
 
 **Photo DataChannel.** `createDataChannel("photos", { negotiated: true, id: 0, ordered: true })` on *both* sides (no `ondatachannel` race). Protocol on the channel — `{"t":"cam","mirrored":bool}` (text; sent when the channel opens and whenever the local camera changes, drives the partner's THEM-frame mirroring), then per photo:
 `{"t":"photo","round":n,"mime":"image/jpeg","size":N}` (text) → binary chunks of **16 KiB** → `{"t":"end","round":n}`. Sender honours back-pressure via `bufferedAmountLowThreshold` (256 KiB). Receiver validates `size ≤ 3 MiB`, round matches the expected round, and assembles a `Blob`. On `end` both ends mark their side done; when a client holds its own photo **and** the partner's, it sends `photo-complete {round}`.
@@ -221,7 +229,8 @@ src/client/
                ConnectionStatus ErrorScreen FilterPicker
   hooks/       useCamera useRoom useSyncClock useWebRTC
   lib/         camera.ts webrtc.ts photo.ts sync.ts filters.ts
-  pages/       Home CreateBooth JoinBooth Booth
+  pages/       Home CreateBooth JoinBooth Booth      (Booth = logic/glue)
+  screens/     CameraGate Lobby Stage Result Problem  (presentational, one per Booth state)
 src/shared/    protocol.ts constants.ts room-code.ts
 src/worker/    index.ts BoothRoom.ts ice.ts
 ```
