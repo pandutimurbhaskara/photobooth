@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers'
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test'
 import { afterEach, describe, expect, it } from 'vitest'
-import { MAX_WS_FRAME_BYTES, ROOM_IDLE_MS, SLOT_GRACE_MS } from '../shared/constants'
+import { CAPTURE_LEAD_MS, EXCHANGE_TIMEOUT_MS, MAX_WS_FRAME_BYTES, ROOM_IDLE_MS, SLOT_GRACE_MS } from '../shared/constants'
 import { closeAll, joinAs, newRoom, openSocket, peek, pid } from './test-helpers'
 
 afterEach(closeAll)
@@ -272,5 +272,136 @@ describe('hibernation', () => {
     expect((await a.take('pong')).clientTime).toBe(7)
     a.send({ type: 'offer', offer: OFFER }) // slot attachments survived
     expect((await b.take('offer')).offer).toEqual(OFFER)
+  })
+})
+
+async function pair() {
+  const code = await newRoom()
+  const stub = env.BOOTH_ROOM.getByName(code)
+  const a = await joinAs(code, 1)
+  const b = await joinAs(code, 2)
+  await a.take('partner-joined')
+  await Promise.all([a.settle(), b.settle()])
+  return { code, stub, a, b }
+}
+
+describe('ready → scheduled capture', () => {
+  it('schedules one capture, identical for both, once both are ready', async () => {
+    const { a, b } = await pair()
+    const before = Date.now()
+    a.send({ type: 'ready' })
+    const first = await a.take('room-state')
+    expect(first.state.participants.a?.ready).toBe(true)
+    expect(first.state.phase).toBe('ready')
+    await b.expectNone('capture-scheduled')
+
+    b.send({ type: 'ready' })
+    const sa = await a.take('capture-scheduled')
+    const sb = await b.take('capture-scheduled')
+    expect(sa).toEqual(sb)
+    expect(sa.round).toBe(1)
+    expect(sa.captureAt).toBeGreaterThanOrEqual(before + CAPTURE_LEAD_MS)
+    expect(sa.captureAt).toBeLessThan(before + CAPTURE_LEAD_MS + 2000)
+
+    const state = await a.take('room-state')
+    expect(state.state).toMatchObject({ phase: 'capture', round: 1, captureAt: sa.captureAt })
+    expect(state.state.participants.a).toMatchObject({ ready: false, photoDone: false })
+  })
+
+  // Review Focus 1: both people press READY in the same instant.
+  it('schedules exactly one round when both press ready at the same instant', async () => {
+    const { a, b } = await pair()
+    a.send({ type: 'ready' })
+    b.send({ type: 'ready' })
+    expect((await a.take('capture-scheduled')).round).toBe(1)
+    expect((await b.take('capture-scheduled')).round).toBe(1)
+    await a.expectNone('capture-scheduled')
+    await b.expectNone('capture-scheduled')
+  })
+
+  it('lets someone un-ready, and ignores ready while alone', async () => {
+    const code = await newRoom()
+    const solo = await joinAs(code, 1)
+    solo.send({ type: 'ready' })
+    expect((await solo.take('room-state')).state.participants.a?.ready).toBe(false) // ignored while waiting
+
+    const b = await joinAs(code, 2)
+    await solo.take('partner-joined')
+    await solo.settle()
+    solo.send({ type: 'ready' })
+    expect((await solo.take('room-state')).state.participants.a?.ready).toBe(true)
+    solo.send({ type: 'unready' })
+    expect((await solo.take('room-state')).state.participants.a?.ready).toBe(false)
+    await b.expectNone('capture-scheduled')
+  })
+
+  it('ignores ready/unready while a round is in flight', async () => {
+    const { a, b } = await pair()
+    a.send({ type: 'ready' })
+    b.send({ type: 'ready' })
+    await a.take('capture-scheduled')
+    await a.settle()
+    a.send({ type: 'ready' })
+    a.send({ type: 'unready' })
+    await a.expectNone('capture-scheduled')
+    const state = await a.take('room-state')
+    expect(state.state).toMatchObject({ phase: 'capture', round: 1 })
+    expect(state.state.participants.a?.ready).toBe(false)
+  })
+})
+
+describe('round lifecycle', () => {
+  async function startRound() {
+    const ctx = await pair()
+    ctx.a.send({ type: 'ready' })
+    ctx.b.send({ type: 'ready' })
+    await ctx.a.take('capture-scheduled')
+    await ctx.b.take('capture-scheduled')
+    await Promise.all([ctx.a.settle(), ctx.b.settle()])
+    return ctx
+  }
+
+  it('returns to ready when both report photo-complete, and the next round is numbered 2', async () => {
+    const { a, b } = await startRound()
+    a.send({ type: 'photo-complete', round: 1 })
+    expect((await b.take('room-state')).state.participants.a?.photoDone).toBe(true)
+    b.send({ type: 'photo-complete', round: 1 })
+    await a.take('room-state') // broadcast for a's own completion (round still in flight)
+    const done = await a.take('room-state') // broadcast after b completed: the round is over
+    expect(done.state).toMatchObject({ phase: 'ready', captureAt: null, round: 1 })
+
+    await Promise.all([a.settle(), b.settle()])
+    a.send({ type: 'ready' })
+    b.send({ type: 'ready' })
+    expect((await a.take('capture-scheduled')).round).toBe(2)
+  })
+
+  it('ignores a photo-complete for the wrong round, or when nothing is in flight', async () => {
+    const { a, stub } = await startRound()
+    a.send({ type: 'photo-complete', round: 0 })
+    a.send({ type: 'photo-complete', round: 9 })
+    await a.expectNone('room-state')
+    await runInDurableObject(stub, (instance) => {
+      expect(peek(instance).rec.slots.a?.photoDone).toBe(false)
+    })
+  })
+
+  it('cancels the round when the partner disconnects mid-capture', async () => {
+    const { a, b } = await startRound()
+    b.ws.close(1000, 'bye')
+    await a.take('partner-left')
+    const state = await a.take('room-state')
+    expect(state.state).toMatchObject({ phase: 'waiting', captureAt: null })
+  })
+
+  it('drops a capture whose exchange never finished once EXCHANGE_TIMEOUT_MS has passed', async () => {
+    const { a, stub } = await startRound()
+    await runInDurableObject(stub, (instance) => {
+      peek(instance).rec.captureAt = Date.now() - EXCHANGE_TIMEOUT_MS - 1
+    })
+    a.send({ type: 'ready' })
+    const state = await a.take('room-state')
+    expect(state.state).toMatchObject({ phase: 'ready', captureAt: null })
+    expect(state.state.participants.a?.ready).toBe(true) // the ready press was accepted
   })
 })

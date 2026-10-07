@@ -3,6 +3,7 @@ import {
   ACTIVITY_PERSIST_MS,
   BUCKET_CAPACITY,
   BUCKET_REFILL_PER_SEC,
+  CAPTURE_LEAD_MS,
   CLOSE,
   EXCHANGE_TIMEOUT_MS,
   MAX_SOCKETS,
@@ -193,7 +194,7 @@ export class BoothRoom extends DurableObject<Env> {
   }
 
   private handle(slot: SlotName, msg: Exclude<ClientMessage, { type: 'join' | 'ping' }>, now: number): void {
-    void now
+    const rec = this.room
     switch (msg.type) {
       case 'offer':
       case 'answer':
@@ -201,10 +202,46 @@ export class BoothRoom extends DurableObject<Env> {
         this.sendTo(otherSlot(slot), msg) // already validated and rebuilt by parseClientMessage
         return
       case 'ready':
-      case 'unready':
-      case 'photo-complete':
-        return // Phase 2 (Task 12) implements ready → scheduled capture
+      case 'unready': {
+        const me = rec.slots[slot]
+        // Only while two people are present and no round is in flight. Re-sync the caller either way
+        // (computing the phase may also drop an expired capture).
+        if (!me || this.phase(now) !== 'ready') {
+          this.broadcastState()
+          return
+        }
+        me.ready = msg.type === 'ready'
+        if (rec.slots.a?.ready && rec.slots.b?.ready) this.schedule(now)
+        this.save()
+        this.broadcastState()
+        return
+      }
+      case 'photo-complete': {
+        const me = rec.slots[slot]
+        if (!me || rec.captureAt === null || msg.round !== rec.round) return
+        me.photoDone = true
+        if (rec.slots.a?.photoDone && rec.slots.b?.photoDone) rec.captureAt = null
+        this.save()
+        this.broadcastState()
+        return
+      }
     }
+  }
+
+  /** The server owns the clock: one timestamp, sent to both. The 3-2-1 on screen is derived from it. */
+  private schedule(now: number): void {
+    const rec = this.room
+    rec.round += 1
+    rec.captureAt = now + CAPTURE_LEAD_MS
+    for (const name of SLOTS) {
+      const s = rec.slots[name]
+      if (s) {
+        s.ready = false
+        s.photoDone = false
+      }
+    }
+    const message: ServerMessage = { type: 'capture-scheduled', captureAt: rec.captureAt, round: rec.round }
+    for (const s of this.live()) this.send(s.ws, message)
   }
 
   /** Token bucket per socket; resets when the object wakes from hibernation, which is fine. */
