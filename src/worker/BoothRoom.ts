@@ -1,6 +1,8 @@
 import { DurableObject } from 'cloudflare:workers'
 import {
   ACTIVITY_PERSIST_MS,
+  BUCKET_CAPACITY,
+  BUCKET_REFILL_PER_SEC,
   CLOSE,
   EXCHANGE_TIMEOUT_MS,
   MAX_SOCKETS,
@@ -8,7 +10,7 @@ import {
   SLOT_GRACE_MS,
 } from '../shared/constants'
 import { decodeClientFrame, otherSlot } from '../shared/protocol'
-import type { ErrorCode, Phase, PState, RoomState, ServerMessage, SlotName } from '../shared/protocol'
+import type { ClientMessage, ErrorCode, Phase, PState, RoomState, ServerMessage, SlotName } from '../shared/protocol'
 
 const WS_OPEN = 1
 const SLOTS: readonly SlotName[] = ['a', 'b']
@@ -41,6 +43,7 @@ export class BoothRoom extends DurableObject<Env> {
   private persistedActivityAt = 0
   /** Sockets we know are going away (replaced or closed): excluded from "connected". */
   private readonly closing = new WeakSet<WebSocket>()
+  private readonly buckets = new WeakMap<WebSocket, { tokens: number; at: number }>()
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -82,6 +85,14 @@ export class BoothRoom extends DurableObject<Env> {
 
   async webSocketMessage(ws: WebSocket, data: string | ArrayBuffer): Promise<void> {
     if (!this.rec) return this.reject(ws, 'room-not-found', CLOSE.NOT_FOUND)
+    if (!this.take(ws)) {
+      try {
+        ws.close(CLOSE.RATE_LIMITED, 'rate-limited')
+      } catch {
+        // already closed
+      }
+      return
+    }
     const msg = decodeClientFrame(data)
     if (msg === null) return this.reject(ws, 'invalid-message')
     const att = ws.deserializeAttachment() as Attachment | null
@@ -90,7 +101,14 @@ export class BoothRoom extends DurableObject<Env> {
       return this.handleJoin(ws, msg.participantId)
     }
     if (!att) return this.reject(ws, 'not-joined')
-    this.touch(Date.now())
+    if (msg.type === 'ping') {
+      // Workers' Date.now() only advances at I/O boundaries; this handler does no heavy work, so the error is sub-millisecond.
+      this.send(ws, { type: 'pong', clientTime: msg.clientTime, serverTime: Date.now() })
+      return
+    }
+    const now = Date.now()
+    this.touch(now)
+    this.handle(att.slot, msg, now)
   }
 
   async webSocketClose(ws: WebSocket, code: number): Promise<void> {
@@ -104,6 +122,27 @@ export class BoothRoom extends DurableObject<Env> {
 
   async webSocketError(ws: WebSocket): Promise<void> {
     this.onGone(ws)
+  }
+
+  async alarm(): Promise<void> {
+    const rec = this.rec
+    if (!rec) return
+    const due = rec.lastActivityAt + ROOM_IDLE_MS
+    if (Date.now() < due) {
+      await this.ctx.storage.setAlarm(due) // activity since arming: try again later
+      return
+    }
+    for (const ws of this.ctx.getWebSockets()) {
+      this.closing.add(ws)
+      this.send(ws, { type: 'error', code: 'expired' })
+      try {
+        ws.close(CLOSE.EXPIRED, 'expired')
+      } catch {
+        // already closed
+      }
+    }
+    this.rec = null
+    await this.ctx.storage.deleteAll()
   }
 
   // ---- Join / leave -----------------------------------------------------------------------
@@ -151,6 +190,33 @@ export class BoothRoom extends DurableObject<Env> {
     this.save()
     this.sendTo(otherSlot(att.slot), { type: 'partner-left' })
     this.broadcastState()
+  }
+
+  private handle(slot: SlotName, msg: Exclude<ClientMessage, { type: 'join' | 'ping' }>, now: number): void {
+    void now
+    switch (msg.type) {
+      case 'offer':
+      case 'answer':
+      case 'ice-candidate':
+        this.sendTo(otherSlot(slot), msg) // already validated and rebuilt by parseClientMessage
+        return
+      case 'ready':
+      case 'unready':
+      case 'photo-complete':
+        return // Phase 2 (Task 12) implements ready → scheduled capture
+    }
+  }
+
+  /** Token bucket per socket; resets when the object wakes from hibernation, which is fine. */
+  private take(ws: WebSocket): boolean {
+    const now = Date.now()
+    const b = this.buckets.get(ws) ?? { tokens: BUCKET_CAPACITY, at: now }
+    b.tokens = Math.min(BUCKET_CAPACITY, b.tokens + ((now - b.at) / 1000) * BUCKET_REFILL_PER_SEC)
+    b.at = now
+    this.buckets.set(ws, b)
+    if (b.tokens < 1) return false
+    b.tokens -= 1
+    return true
   }
 
   // ---- State helpers ----------------------------------------------------------------------
