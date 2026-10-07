@@ -1,4 +1,5 @@
 import { formatRoomCode } from '../../shared/room-code'
+import { applyFilter, type FilterId } from './filters'
 import { coverRect, layoutStrip, type Rect, type StripLayout } from './photo'
 
 export const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'] as const
@@ -33,6 +34,7 @@ export interface StripMeta {
   dateLabel: string
   /** Seeds the per-frame tilt; use `${code}:${round}` so both partners match. */
   seed: string
+  filter: FilterId
 }
 
 const PAPER = '#fff8e7'
@@ -42,14 +44,27 @@ const FRAME_BORDER = 10
 const MAX_TILT_RAD = 0.014 // ≈ 0.8°
 const FONT = '"Space Grotesk Variable", system-ui, sans-serif'
 
-function drawCell(ctx: CanvasRenderingContext2D, bmp: ImageBitmap, cell: Rect, tilt: number): void {
+function drawCell(ctx: CanvasRenderingContext2D, bmp: ImageBitmap, cell: Rect, tilt: number, filter: FilterId): void {
+  // Crop to the cell on a scratch canvas first, so the filter only touches the photo (not paper or frame).
+  const tile = document.createElement('canvas')
+  tile.width = cell.w
+  tile.height = cell.h
+  const t = tile.getContext('2d')
+  if (!t) throw new Error('2d canvas is unavailable')
   const { sx, sy, sw, sh } = coverRect(bmp.width, bmp.height, cell.w, cell.h)
+  t.drawImage(bmp, sx, sy, sw, sh, 0, 0, cell.w, cell.h)
+  if (filter !== 'original') {
+    const pixels = t.getImageData(0, 0, cell.w, cell.h)
+    applyFilter(pixels.data, filter)
+    t.putImageData(pixels, 0, 0)
+  }
+
   ctx.save()
   ctx.translate(cell.x + cell.w / 2, cell.y + cell.h / 2)
   ctx.rotate(tilt)
   ctx.fillStyle = INK
   ctx.fillRect(-cell.w / 2 - FRAME_BORDER, -cell.h / 2 - FRAME_BORDER, cell.w + FRAME_BORDER * 2, cell.h + FRAME_BORDER * 2)
-  ctx.drawImage(bmp, sx, sy, sw, sh, -cell.w / 2, -cell.h / 2, cell.w, cell.h)
+  ctx.drawImage(tile, -cell.w / 2, -cell.h / 2)
   ctx.restore()
 }
 
@@ -93,7 +108,7 @@ export async function renderStrip(
   g.cells.forEach((cell, i) => {
     const tilt = (rand() - 0.5) * 2 * MAX_TILT_RAD // always consume one value per cell so the sequence is stable
     const bmp = bitmaps[i]
-    if (bmp) drawCell(ctx, bmp, cell, tilt)
+    if (bmp) drawCell(ctx, bmp, cell, tilt, meta.filter)
   })
 
   ctx.fillStyle = INK

@@ -265,6 +265,7 @@ function BoothInner({ code }: { code: string }) {
       <Result
         rounds={rounds}
         code={code}
+        status={status}
         me={me}
         partner={partner}
         partnerHere={Boolean(partner?.connected)}

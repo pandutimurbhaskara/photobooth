@@ -99,3 +99,30 @@ test('preview matches result: a rear camera is not flipped, on the owner and on 
   await expect.poll(() => lastCapture(b), { timeout: 15_000 }).toMatchObject({ mirrored: false })
   await expect.poll(() => lastCapture(a), { timeout: 15_000 }).toMatchObject({ mirrored: true })
 })
+
+test('a filter re-renders the strip; B&W really is greyscale', async ({ browser }) => {
+  const { a, b } = await connectedPair(browser)
+  await pressReady(a)
+  await pressReady(b)
+  const strip = a.getByRole('img', { name: 'Photo strip' })
+  await expect(strip).toBeVisible({ timeout: 30_000 })
+  const before = await strip.getAttribute('src')
+
+  await a.getByRole('radio', { name: 'B&W' }).check()
+  await expect.poll(() => strip.getAttribute('src')).not.toBe(before)
+
+  // Sample a few pixels from inside the first photo cell (x 48..1008, y 48..768) of the 1056x1800 strip.
+  const greyscale = await strip.evaluate(async (img: HTMLImageElement) => {
+    await img.decode()
+    const c = document.createElement('canvas')
+    c.width = img.naturalWidth
+    c.height = img.naturalHeight
+    const ctx = c.getContext('2d')!
+    ctx.drawImage(img, 0, 0)
+    return [[300, 300], [528, 408], [700, 500], [900, 650]].every(([x, y]) => {
+      const [r, g, bl] = ctx.getImageData(x!, y!, 1, 1).data
+      return Math.abs(r! - g!) <= 1 && Math.abs(g! - bl!) <= 1
+    })
+  })
+  expect(greyscale).toBe(true)
+})
