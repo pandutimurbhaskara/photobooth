@@ -175,6 +175,14 @@ function BoothInner({ code }: { code: string }) {
     if (channelOpen) sendText(JSON.stringify({ t: 'cam', mirrored: camera.mirrored }))
   }, [channelOpen, sendText, camera.mirrored])
 
+  // Photos live only in this tab, so warn before a reload or close throws them away.
+  useEffect(() => {
+    if (rounds.length === 0) return
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault()
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [rounds.length])
+
   const phase = room.state?.phase
   useEffect(() => {
     // The server gave up on the round (exchange timeout) while this side still lacked a photo.
@@ -221,10 +229,11 @@ function BoothInner({ code }: { code: string }) {
   if (hasResult) {
     return (
       <Result
-        latest={latest}
-        slot={mySlot}
+        rounds={rounds}
+        code={code}
         me={me}
         partner={partner}
+        partnerHere={Boolean(partner?.connected)}
         canRetake={Boolean(partner?.connected) && room.state.phase === 'ready' && sync.synced && rtc.channelOpen}
         onReady={onReady}
       />

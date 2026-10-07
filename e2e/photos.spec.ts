@@ -9,19 +9,55 @@ async function transformOf(page: Page, testId: string): Promise<string> {
   return page.getByTestId(testId).evaluate((el) => getComputedStyle(el).transform)
 }
 
-test('each person ends up holding both photos', async ({ browser }) => {
+test('each person gets a photo strip with both photos, and can download it as PNG and JPG', async ({ browser }) => {
   const { a, b } = await connectedPair(browser)
   await pressReady(a)
   await pressReady(b)
 
   for (const page of [a, b]) {
     await expect(page.getByRole('heading', { name: 'LOOK WHAT YOU MADE.' })).toBeVisible({ timeout: 30_000 })
-    for (const alt of ['Your photo', 'Their photo']) {
-      const img = page.getByRole('img', { name: alt })
-      await expect(img).toBeVisible()
-      expect(await img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0)
-    }
+    const strip = page.getByRole('img', { name: 'Photo strip' })
+    await expect(strip).toBeVisible()
+    expect(await strip.evaluate((el: HTMLImageElement) => [el.naturalWidth, el.naturalHeight])).toEqual([1056, 1800])
   }
+
+  const [pngDownload] = await Promise.all([a.waitForEvent('download'), a.getByRole('button', { name: 'DOWNLOAD PHOTO' }).click()])
+  expect(pngDownload.suggestedFilename()).toMatch(/^two-up-[A-HJ-KM-NP-Z2-9]{6}-1\.png$/)
+
+  await a.getByRole('radio', { name: 'JPG' }).click()
+  const [jpgDownload] = await Promise.all([a.waitForEvent('download'), a.getByRole('button', { name: 'DOWNLOAD PHOTO' }).click()])
+  expect(jpgDownload.suggestedFilename()).toMatch(/\.jpg$/)
+})
+
+test('horizontal layout changes the strip size; grid unlocks after a second round', async ({ browser }) => {
+  const { a, b } = await connectedPair(browser)
+  await pressReady(a)
+  await pressReady(b)
+  await expect(a.getByRole('img', { name: 'Photo strip' })).toBeVisible({ timeout: 30_000 })
+  await expect(a.getByRole('radio', { name: 'GRID' })).toBeDisabled()
+
+  await a.getByRole('radio', { name: 'HORIZONTAL' }).click()
+  await expect
+    .poll(() => a.getByRole('img', { name: 'Photo strip' }).evaluate((el: HTMLImageElement) => el.naturalWidth))
+    .toBe(2064)
+
+  await a.getByRole('button', { name: 'RETAKE' }).click()
+  await b.getByRole('button', { name: 'RETAKE' }).click()
+  await expect(a.getByRole('radio', { name: 'GRID' })).toBeEnabled({ timeout: 30_000 })
+  await a.getByRole('radio', { name: 'GRID' }).click()
+  await expect
+    .poll(() => a.getByRole('img', { name: 'Photo strip' }).evaluate((el: HTMLImageElement) => [el.naturalWidth, el.naturalHeight]))
+    .toEqual([2064, 1800])
+})
+
+test('the strip stays downloadable after the partner leaves', async ({ browser }) => {
+  const { a, b } = await connectedPair(browser)
+  await pressReady(a)
+  await pressReady(b)
+  await expect(a.getByRole('img', { name: 'Photo strip' })).toBeVisible({ timeout: 30_000 })
+  await b.close()
+  await expect(a.getByText(/THEY LEFT/)).toBeVisible()
+  await expect(a.getByRole('button', { name: 'DOWNLOAD PHOTO' })).toBeEnabled()
 })
 
 test('preview matches result: a mirrored camera flips both frames and the capture', async ({ browser }) => {
