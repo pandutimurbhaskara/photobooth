@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
+import { BrutalButton } from '../components/BrutalButton'
+import { BrutalCard } from '../components/BrutalCard'
+import { SiteHeader } from '../components/SiteHeader'
 
 export function CreateBooth() {
   const navigate = useNavigate()
@@ -25,17 +28,27 @@ export function CreateBooth() {
   }, [create])
 
   return (
-    <main className="mx-auto flex min-h-dvh max-w-xl flex-col justify-center gap-4 p-6">
-      {failed ? (
-        <>
-          <h1 className="text-3xl font-black">COULDN'T BUILD YOUR BOOTH.</h1>
-          <button type="button" onClick={() => void create()} className="border-4 border-black px-4 py-3 font-black">
-            TRY AGAIN
-          </button>
-        </>
-      ) : (
-        <h1 className="text-3xl font-black">BUILDING YOUR BOOTH…</h1>
-      )}
-    </main>
+    <>
+      <SiteHeader />
+      <main className="mx-auto flex max-w-xl flex-col gap-6 p-4 pt-10">
+        <BrutalCard tone={failed ? 'orange' : 'yellow'} heavy className="flex flex-col gap-4 p-6" role={failed ? 'alert' : 'status'}>
+          {failed ? (
+            <>
+              <h1 className="text-4xl font-black uppercase leading-none">COULDN'T BUILD YOUR BOOTH.</h1>
+              <BrutalButton tone="ink" onClick={() => void create()}>
+                TRY AGAIN
+              </BrutalButton>
+            </>
+          ) : (
+            <h1 className="flex items-center gap-3 text-4xl font-black uppercase leading-none">
+              <span aria-hidden="true" className="inline-block animate-wiggle text-5xl">
+                ★
+              </span>
+              BUILDING YOUR BOOTH…
+            </h1>
+          )}
+        </BrutalCard>
+      </main>
+    </>
   )
 }

@@ -1,6 +1,10 @@
 import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router'
 import { normalizeRoomInput } from '../../shared/room-code'
+import { BrutalButton } from '../components/BrutalButton'
+import { BrutalCard } from '../components/BrutalCard'
+import { BrutalInput } from '../components/BrutalInput'
+import { SiteHeader } from '../components/SiteHeader'
 import { getParticipantId } from '../lib/session'
 
 export function JoinForm() {
@@ -32,36 +36,35 @@ export function JoinForm() {
   }
 
   return (
-    <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3">
-      <label htmlFor="join-code" className="font-black">
-        ENTER CODE
-      </label>
-      <input
-        id="join-code"
+    <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
+      <BrutalInput
+        label="ENTER CODE"
         value={value}
         onChange={(e) => setValue(e.target.value)}
+        error={error}
+        placeholder="A7K 9XM"
         autoComplete="off"
         autoCapitalize="characters"
         spellCheck={false}
-        className="border-4 border-black px-3 py-3 text-2xl font-black uppercase tracking-widest"
+        inputMode="text"
       />
-      {error && (
-        <p role="alert" className="font-black">
-          {error}
-        </p>
-      )}
-      <button type="submit" disabled={busy} className="border-4 border-black px-4 py-3 font-black">
+      <BrutalButton type="submit" tone="ink" size="xl" disabled={busy}>
         JOIN
-      </button>
+      </BrutalButton>
     </form>
   )
 }
 
 export function JoinBooth() {
   return (
-    <main className="mx-auto flex min-h-dvh max-w-xl flex-col justify-center gap-4 p-6">
-      <h1 className="text-3xl font-black">JOIN A BOOTH</h1>
-      <JoinForm />
-    </main>
+    <>
+      <SiteHeader />
+      <main className="mx-auto flex max-w-xl flex-col gap-6 p-4 pt-10">
+        <BrutalCard tone="lime" heavy className="flex flex-col gap-5 p-5">
+          <h1 className="text-4xl font-black uppercase leading-none">JOIN A BOOTH</h1>
+          <JoinForm />
+        </BrutalCard>
+      </main>
+    </>
   )
 }
