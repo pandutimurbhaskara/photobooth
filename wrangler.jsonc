@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "photobooth",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-10-07",
+  // The Vite plugin fills in assets.directory at build time.
+  "assets": {
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "durable_objects": { "bindings": [{ "name": "BOOTH_ROOM", "class_name": "BoothRoom" }] },
+  // Declarative DO registration (replaces the legacy `migrations` block; they are mutually exclusive).
+  "exports": { "BoothRoom": { "type": "durable-object", "storage": "sqlite" } },
+  // namespace_id must be unique per Cloudflare account: change these if they collide.
+  "ratelimits": [
+    { "name": "RL_CREATE", "namespace_id": "4101", "simple": { "limit": 20, "period": 60 } },
+    { "name": "RL_LOOKUP", "namespace_id": "4102", "simple": { "limit": 120, "period": 60 } }
+  ],
+  // Optional TURN: set TURN_KEY_ID here, and `wrangler secret put TURN_KEY_API_TOKEN`.
+  "vars": { "TURN_KEY_ID": "" },
+  "observability": { "enabled": false }
+}

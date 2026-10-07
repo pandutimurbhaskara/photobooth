@@ -1,0 +1,12 @@
+{
+  "name": "photobooth-test",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-10-07",
+  "durable_objects": { "bindings": [{ "name": "BOOTH_ROOM", "class_name": "BoothRoom" }] },
+  "exports": { "BoothRoom": { "type": "durable-object", "storage": "sqlite" } },
+  "ratelimits": [
+    { "name": "RL_CREATE", "namespace_id": "4201", "simple": { "limit": 1000, "period": 60 } },
+    { "name": "RL_LOOKUP", "namespace_id": "4202", "simple": { "limit": 1000, "period": 60 } }
+  ],
+  "vars": { "TURN_KEY_ID": "" }
+}
