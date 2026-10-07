@@ -1,1 +1,82 @@
 @import 'tailwindcss';
+@import '@fontsource-variable/space-grotesk';
+
+@theme {
+  --color-paper: #fff8e7;
+  --color-ink: #0a0a0a;
+  --color-yellow: #ffe600;
+  --color-pink: #ff4fa3;
+  --color-blue: #2f5bff;
+  --color-lime: #b6ff3b;
+  --color-orange: #ff8a1f;
+  --color-purple: #8b5cf6;
+
+  --font-display: 'Space Grotesk Variable', ui-sans-serif, system-ui, sans-serif;
+
+  --shadow-brutal: 5px 5px 0 #0a0a0a;
+  --shadow-brutal-sm: 3px 3px 0 #0a0a0a;
+  --shadow-press: 1px 1px 0 #0a0a0a;
+
+  --animate-pop: pop 180ms steps(4, end) both;
+  --animate-wiggle: wiggle 700ms steps(3, end) infinite;
+
+  @keyframes pop {
+    from {
+      transform: scale(0.5) rotate(-8deg);
+    }
+    70% {
+      transform: scale(1.12) rotate(2deg);
+    }
+    to {
+      transform: scale(1) rotate(0);
+    }
+  }
+  @keyframes wiggle {
+    0%,
+    100% {
+      transform: rotate(-4deg);
+    }
+    50% {
+      transform: rotate(4deg);
+    }
+  }
+}
+
+@layer base {
+  html {
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-display);
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  :focus-visible {
+    outline: 3px solid var(--color-ink);
+    outline-offset: 3px;
+    box-shadow: 0 0 0 6px var(--color-yellow);
+  }
+  ::selection {
+    background: var(--color-yellow);
+    color: var(--color-ink);
+  }
+  button,
+  a,
+  label {
+    touch-action: manipulation;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
