@@ -1,4 +1,6 @@
 import { Link } from 'react-router'
+import { buttonClass } from '../components/BrutalButton'
+import { BrutalCard } from '../components/BrutalCard'
 
 export type ProblemKind =
   | 'camera-blocked'
@@ -35,18 +37,23 @@ interface Props {
 export function Problem({ kind, onRetry }: Props) {
   const { title, body, action } = COPY[kind]
   return (
-    <main className="mx-auto flex min-h-dvh max-w-xl flex-col justify-center gap-4 p-6" role="alert">
-      <h1 className="text-4xl font-black">{title}</h1>
-      <p className="text-lg font-bold">{body}</p>
-      {action.kind === 'retry' ? (
-        <button type="button" onClick={onRetry} className="border-4 border-black px-4 py-3 font-black">
-          {action.label}
-        </button>
-      ) : (
-        <Link to={action.to} className="border-4 border-black px-4 py-3 text-center font-black">
-          {action.label}
-        </Link>
-      )}
+    <main className="mx-auto flex min-h-dvh max-w-xl flex-col justify-center p-4" role="alert">
+      <BrutalCard tone="orange" heavy className="relative flex flex-col gap-4 p-6">
+        <span aria-hidden="true" className="absolute -right-3 -top-5 rotate-6 border-4 border-ink bg-yellow px-3 text-4xl font-black">
+          !
+        </span>
+        <h1 className="text-4xl font-black uppercase leading-[0.95]">{title}</h1>
+        <p className="text-lg font-black uppercase leading-snug">{body}</p>
+        {action.kind === 'retry' ? (
+          <button type="button" onClick={onRetry} className={buttonClass('ink', 'xl')}>
+            {action.label}
+          </button>
+        ) : (
+          <Link to={action.to} className={buttonClass('ink', 'xl')}>
+            {action.label}
+          </Link>
+        )}
+      </BrutalCard>
     </main>
   )
 }

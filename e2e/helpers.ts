@@ -21,7 +21,7 @@ export async function newPlayer(browser: Browser, opts: { viewport?: { width: nu
   const ip = `10.0.${Math.floor(players / 250)}.${(players % 250) + 1}`
   const context = await browser.newContext({
     baseURL: BASE,
-    permissions: ['camera'],
+    permissions: ['camera', 'clipboard-read', 'clipboard-write'],
     extraHTTPHeaders: { 'CF-Connecting-IP': ip },
     ...opts,
   })

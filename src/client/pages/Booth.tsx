@@ -3,6 +3,7 @@ import { useParams } from 'react-router'
 import { SYNC_BURST_READY } from '../../shared/constants'
 import { otherSlot, type ServerMessage, type SlotName } from '../../shared/protocol'
 import { normalizeRoomInput } from '../../shared/room-code'
+import type { ConnKind } from '../components/ConnectionStatus'
 import { useCamera } from '../hooks/useCamera'
 import { useLatest } from '../hooks/useLatest'
 import { useRoom } from '../hooks/useRoom'
@@ -20,6 +21,7 @@ import { CameraGate } from '../screens/CameraGate'
 import { Lobby } from '../screens/Lobby'
 import { Problem, type ProblemKind } from '../screens/Problem'
 import { Result } from '../screens/Result'
+import { Splash } from '../screens/Splash'
 import { Stage } from '../screens/Stage'
 
 const cameraProblem: Record<CameraError, ProblemKind> = {
@@ -175,6 +177,13 @@ function BoothInner({ code }: { code: string }) {
     if (channelOpen) sendText(JSON.stringify({ t: 'cam', mirrored: camera.mirrored }))
   }, [channelOpen, sendText, camera.mirrored])
 
+  // Remember that someone was here, so the lobby can say they left.
+  const partnerConnected = room.state ? Boolean(room.state.participants[otherSlot(room.state.you)]?.connected) : false
+  const [hadPartner, setHadPartner] = useState(false)
+  useEffect(() => {
+    if (partnerConnected) setHadPartner(true)
+  }, [partnerConnected])
+
   // Photos live only in this tab, so warn before a reload or close throws them away.
   useEffect(() => {
     if (rounds.length === 0) return
@@ -191,7 +200,7 @@ function BoothInner({ code }: { code: string }) {
     }
   }, [phase])
 
-  if (gate === 'checking') return <main className="p-6 font-black">CHECKING BOOTH…</main>
+  if (gate === 'checking') return <Splash text="CHECKING BOOTH…" />
   if (gate === 'not-found') return <Problem kind="not-found" />
   if (gate === 'full') return <Problem kind="room-full" />
   if (gate === 'error') return <Problem kind="gate-error" onRetry={() => location.reload()} />
@@ -200,20 +209,45 @@ function BoothInner({ code }: { code: string }) {
   if (!camera.stream) return <CameraGate onStart={() => void camera.start()} />
 
   if (room.status === 'closed') return <Problem kind={closedProblem(room.closeCode)} onRetry={room.reconnect} />
-  if (!room.state) return <main className="p-6 font-black">CONNECTING…</main>
+  if (!room.state) return <Splash text="CONNECTING…" />
 
   const mySlot = room.state.you
   const partner = room.state.participants[otherSlot(mySlot)]
   const me = room.state.participants[mySlot]
   const latest = rounds[rounds.length - 1]
   const hasResult = latest !== undefined && room.state.phase !== 'capture'
+  const hasPhotos = rounds.length > 0
+  const status: ConnKind =
+    room.status === 'reconnecting'
+      ? 'reconnecting'
+      : room.status !== 'open'
+        ? 'lost'
+        : !partner?.connected
+          ? 'waiting'
+          : rtc.peerState === 'connected'
+            ? 'connected'
+            : rtc.peerState === 'reconnecting'
+              ? 'reconnecting'
+              : 'connecting'
   const onReady = (ready: boolean) => {
     if (ready) sync.burst(SYNC_BURST_READY) // refresh the offset right before a round
     room.send({ type: ready ? 'ready' : 'unready' })
   }
 
   if (!partner?.connected && !hasResult) {
-    return <Lobby code={code} shareUrl={`${location.origin}/b/${code}`} stream={camera.stream} mirrored={camera.mirrored} />
+    return (
+      <Lobby
+        code={code}
+        shareUrl={`${location.origin}/b/${code}`}
+        status={status}
+        hasPhotos={hasPhotos}
+        stream={camera.stream}
+        mirrored={camera.mirrored}
+        canFlip={camera.canFlip}
+        onFlip={() => void camera.flip()}
+        partnerLeft={hadPartner}
+      />
+    )
   }
   if (rtc.peerState === 'failed' || exchangeFailed) {
     return (
@@ -241,11 +275,15 @@ function BoothInner({ code }: { code: string }) {
   }
   return (
     <Stage
+      code={code}
+      status={status}
+      hasPhotos={hasPhotos}
+      canFlip={camera.canFlip}
+      onFlip={() => void camera.flip()}
       stream={camera.stream}
       mirrored={camera.mirrored}
       remoteStream={rtc.remoteStream}
       remoteMirrored={partnerMirrored}
-      peerState={rtc.peerState}
       localVideoRef={localVideo}
       me={me}
       partner={partner}

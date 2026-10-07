@@ -1,14 +1,20 @@
+import { BrutalButton } from '../components/BrutalButton'
+import { BrutalCard } from '../components/BrutalCard'
+import { PrivacyNote } from '../components/PrivacyNote'
+
 export function CameraGate({ onStart }: { onStart: () => void }) {
   return (
-    <main className="mx-auto flex min-h-dvh max-w-xl flex-col justify-center gap-4 p-6">
-      <h1 className="text-4xl font-black">READY WHEN YOU ARE.</h1>
-      <button type="button" onClick={onStart} className="border-4 border-black px-4 py-4 text-xl font-black">
-        TURN ON CAMERA
-      </button>
-      <p className="text-sm font-bold">
-        YOUR CAMERA STAYS IN YOUR BROWSER AND CONNECTS DIRECTLY TO YOUR PARTNER WHEN POSSIBLE. PHOTOS ARE PROCESSED
-        LOCALLY UNLESS YOU CHOOSE TO SAVE OR SHARE THEM.
-      </p>
+    <main className="mx-auto flex min-h-dvh max-w-xl flex-col justify-center gap-5 p-4">
+      <BrutalCard tone="yellow" heavy className="flex flex-col gap-5 p-6">
+        <p aria-hidden="true" className="text-sm font-black tracking-[0.3em]">
+          01 / CAMERA
+        </p>
+        <h1 className="text-5xl font-black uppercase leading-[0.9] tracking-tighter">READY WHEN YOU ARE.</h1>
+        <BrutalButton tone="ink" size="xl" onClick={onStart}>
+          TURN ON CAMERA
+        </BrutalButton>
+      </BrutalCard>
+      <PrivacyNote />
     </main>
   )
 }
