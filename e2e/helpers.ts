@@ -1,8 +1,14 @@
-import { expect, type Browser, type Page } from '@playwright/test'
+import { expect, type Browser, type BrowserContext, type Page } from '@playwright/test'
 
 export const BASE = 'http://localhost:5199'
 
 let players = 0
+const contexts: BrowserContext[] = []
+
+/** Playwright does not close contexts made with browser.newContext(); each live one keeps a fake camera and WebRTC running, so an unclosed suite slows to a crawl. Call from test.afterEach. */
+export async function closePlayers(): Promise<void> {
+  await Promise.all(contexts.splice(0).map((c) => c.close().catch(() => undefined)))
+}
 
 /**
  * One isolated browser context = one person (own storage, own participant id) with their own IP.
@@ -19,6 +25,7 @@ export async function newPlayer(browser: Browser, opts: { viewport?: { width: nu
     extraHTTPHeaders: { 'CF-Connecting-IP': ip },
     ...opts,
   })
+  contexts.push(context)
   return context.newPage()
 }
 
@@ -43,4 +50,33 @@ export async function expectRemoteVideo(page: Page): Promise<void> {
       { message: 'remote video should be decoding frames' },
     )
     .toBe(true)
+}
+
+export async function connectedPair(browser: Browser): Promise<{ a: Page; b: Page; url: string }> {
+  const a = await newPlayer(browser)
+  const b = await newPlayer(browser)
+  const url = await createBooth(a)
+  await enterBooth(a)
+  await b.goto(url)
+  await enterBooth(b)
+  await expectRemoteVideo(a)
+  await expectRemoteVideo(b)
+  return { a, b, url }
+}
+
+export async function pressReady(page: Page): Promise<void> {
+  await page.getByRole('button', { name: /i'm ready/i }).click() // waits for the button to be enabled
+}
+
+export interface Captured {
+  round: number
+  at: number
+  wallAt: number
+  mirrored: boolean
+}
+
+export function lastCapture(page: Page): Promise<Captured | null> {
+  return page.evaluate(
+    () => (window as unknown as { __booth?: { lastCapture?: Captured } }).__booth?.lastCapture ?? null,
+  )
 }

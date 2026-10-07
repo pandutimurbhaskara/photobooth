@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test'
-import { createBooth, enterBooth, expectRemoteVideo, newPlayer } from './helpers'
+import { closePlayers, createBooth, enterBooth, expectRemoteVideo, newPlayer } from './helpers'
+
+test.afterEach(closePlayers)
 
 test('two people see each other over real WebRTC', async ({ browser }) => {
   const a = await newPlayer(browser)
