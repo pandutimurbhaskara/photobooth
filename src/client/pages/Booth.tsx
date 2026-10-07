@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router'
 import { SYNC_BURST_READY } from '../../shared/constants'
 import { otherSlot, type ServerMessage, type SlotName } from '../../shared/protocol'
@@ -12,10 +12,14 @@ import { useWebRTC } from '../hooks/useWebRTC'
 import type { CameraError } from '../lib/camera'
 import { browserCaptureDeps, createCaptureScheduler } from '../lib/capture'
 import { recordCapture } from '../lib/dev-hook'
+import { captureFrame, FrameNotReadyError } from '../lib/photo'
+import { parseControl, PhotoReceiver, sendPhoto } from '../lib/photo-transfer'
+import { completeRound, mergePhoto, pushRound, type Pending, type Round } from '../lib/rounds'
 import { getParticipantId } from '../lib/session'
 import { CameraGate } from '../screens/CameraGate'
 import { Lobby } from '../screens/Lobby'
 import { Problem, type ProblemKind } from '../screens/Problem'
+import { Result } from '../screens/Result'
 import { Stage } from '../screens/Stage'
 
 const cameraProblem: Record<CameraError, ProblemKind> = {
@@ -53,6 +57,13 @@ function BoothInner({ code }: { code: string }) {
   const slot = useRef<SlotName | null>(null)
   const [countdown, setCountdown] = useState<{ round: number; captureAt: number } | null>(null)
   const [missed, setMissed] = useState(false)
+  const [rounds, setRounds] = useState<Round[]>([])
+  const [partnerMirrored, setPartnerMirrored] = useState(true) // until the partner's `cam` message says otherwise
+  const [captured, setCaptured] = useState(false)
+  const [exchangeFailed, setExchangeFailed] = useState(false)
+  const pending = useRef<Pending | null>(null)
+  const completed = useRef(-1) // highest round already finished: later duplicates are ignored
+  const currentRound = useRef(0) // the round the server most recently announced
 
   // Server events → WebRTC and the capture scheduler. `latest` keeps this closure fresh without reconnecting the socket.
   const onMessage = useLatest((m: ServerMessage, isSnapshot: boolean) => {
@@ -95,27 +106,82 @@ function BoothInner({ code }: { code: string }) {
     enabled: gate === 'ok' && camera.stream !== null,
     onMessage: (m, isSnapshot) => onMessage.current(m, isSnapshot),
   })
+
+  // A photo from either side lands here; when both halves of a round exist it is stored and reported.
+  const addPhoto = useLatest((round: number, who: 'own' | 'partner', blob: Blob) => {
+    if (round <= completed.current) return
+    const merged = mergePhoto(pending.current, round, who, blob)
+    pending.current = merged
+    const done = slot.current ? completeRound(merged, slot.current) : null
+    if (!done) return
+    completed.current = round
+    pending.current = null
+    setRounds((all) => pushRound(all, done))
+    room.send({ type: 'photo-complete', round })
+  })
+  const receiver = useMemo(
+    () => new PhotoReceiver(() => currentRound.current, (round, blob) => addPhoto.current(round, 'partner', blob)),
+    [addPhoto],
+  )
+
   const rtc = useWebRTC({
     code,
     send: room.send,
     localStream: camera.stream,
-    onChannelText: () => {},
-    onChannelBinary: () => {},
+    onChannelText: (text) => {
+      const control = parseControl(text)
+      if (!control) return
+      if (control.t === 'cam') setPartnerMirrored(control.mirrored)
+      else receiver.onControl(control)
+    },
+    onChannelBinary: (data) => receiver.onBinary(data),
   })
   const sync = useSyncClock(room.send, room.status === 'open')
   const scheduler = useMemo(() => createCaptureScheduler(browserCaptureDeps(sync.now)), [sync.now])
 
-  // Phase 2: "capture" just records the moment; Task 18 replaces the body with a real frame grab.
   const onCapture = useLatest((round: number, at: number) => {
-    recordCapture({ round, at, wallAt: Date.now(), mirrored: camera.mirrored })
-    room.send({ type: 'photo-complete', round }) // Phase 2 stand-in: no photo to exchange yet
+    const wallAt = Date.now() // the moment the shared timestamp fired on this device
+    const video = localVideo.current
+    const mirrored = camera.mirrored
+    void (async () => {
+      try {
+        if (!video) throw new FrameNotReadyError()
+        const blob = await captureFrame(video, { mirrored })
+        recordCapture({ round, at, wallAt, mirrored })
+        setCaptured(true)
+        addPhoto.current(round, 'own', blob)
+        const channel = { sendText: rtc.sendText, sendBinary: rtc.sendBinary, waitForDrain: rtc.waitForDrain }
+        if (!(await sendPhoto(channel, round, blob))) setExchangeFailed(true)
+      } catch {
+        setMissed(true) // no frame yet, or the encoder failed: say so rather than sending nothing silently
+      }
+    })()
   })
   const beginRound = useLatest((round: number, captureAt: number) => {
     setMissed(false)
     const accepted = scheduler.schedule(round, captureAt, (r, at) => onCapture.current(r, at), () => setMissed(true))
-    if (accepted) setCountdown({ round, captureAt })
+    if (!accepted) return
+    currentRound.current = round
+    pending.current = null
+    setCaptured(false)
+    setExchangeFailed(false)
+    setCountdown({ round, captureAt })
   })
   const finishCountdown = useCallback(() => setCountdown(null), [])
+
+  // Tell the partner whether our preview (and so our photo) is mirrored, so their THEM frame matches our photo.
+  const { sendText, channelOpen } = rtc
+  useEffect(() => {
+    if (channelOpen) sendText(JSON.stringify({ t: 'cam', mirrored: camera.mirrored }))
+  }, [channelOpen, sendText, camera.mirrored])
+
+  const phase = room.state?.phase
+  useEffect(() => {
+    // The server gave up on the round (exchange timeout) while this side still lacked a photo.
+    if (phase === 'ready' && pending.current !== null && pending.current.round === currentRound.current) {
+      setExchangeFailed(true)
+    }
+  }, [phase])
 
   if (gate === 'checking') return <main className="p-6 font-black">CHECKING BOOTH…</main>
   if (gate === 'not-found') return <Problem kind="not-found" />
@@ -128,32 +194,60 @@ function BoothInner({ code }: { code: string }) {
   if (room.status === 'closed') return <Problem kind={closedProblem(room.closeCode)} onRetry={room.reconnect} />
   if (!room.state) return <main className="p-6 font-black">CONNECTING…</main>
 
-  const partner = room.state.participants[otherSlot(room.state.you)]
-  if (!partner?.connected) {
+  const mySlot = room.state.you
+  const partner = room.state.participants[otherSlot(mySlot)]
+  const me = room.state.participants[mySlot]
+  const latest = rounds[rounds.length - 1]
+  const hasResult = latest !== undefined && room.state.phase !== 'capture'
+  const onReady = (ready: boolean) => {
+    if (ready) sync.burst(SYNC_BURST_READY) // refresh the offset right before a round
+    room.send({ type: ready ? 'ready' : 'unready' })
+  }
+
+  if (!partner?.connected && !hasResult) {
     return <Lobby code={code} shareUrl={`${location.origin}/b/${code}`} stream={camera.stream} mirrored={camera.mirrored} />
   }
-  if (rtc.peerState === 'failed') return <Problem kind="webrtc-failed" onRetry={room.reconnect} />
-
-  const me = room.state.participants[room.state.you]
+  if (rtc.peerState === 'failed' || exchangeFailed) {
+    return (
+      <Problem
+        kind="webrtc-failed"
+        onRetry={() => {
+          setExchangeFailed(false)
+          room.reconnect()
+        }}
+      />
+    )
+  }
+  if (hasResult) {
+    return (
+      <Result
+        latest={latest}
+        slot={mySlot}
+        me={me}
+        partner={partner}
+        canRetake={Boolean(partner?.connected) && room.state.phase === 'ready' && sync.synced && rtc.channelOpen}
+        onReady={onReady}
+      />
+    )
+  }
   return (
     <Stage
       stream={camera.stream}
       mirrored={camera.mirrored}
       remoteStream={rtc.remoteStream}
-      remoteMirrored
+      remoteMirrored={partnerMirrored}
       peerState={rtc.peerState}
       localVideoRef={localVideo}
       me={me}
       partner={partner}
       canReady={sync.synced && rtc.peerState === 'connected' && rtc.channelOpen}
-      onReady={(ready) => {
-        if (ready) sync.burst(SYNC_BURST_READY) // refresh the offset right before a round
-        room.send({ type: ready ? 'ready' : 'unready' })
-      }}
+      onReady={onReady}
       countdown={countdown}
       now={sync.now}
       onCountdownDone={finishCountdown}
       missed={missed}
+      exchanging={room.state.phase === 'capture' && countdown === null}
+      captured={captured}
     />
   )
 }

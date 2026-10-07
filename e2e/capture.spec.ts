@@ -26,13 +26,14 @@ test('a second round can follow the first', async ({ browser }) => {
   const { a, b } = await connectedPair(browser)
   await pressReady(a)
   await pressReady(b)
-  await expect.poll(() => lastCapture(a), { timeout: 15_000 }).toMatchObject({ round: 1 })
-  await expect(a.getByTestId('countdown')).toBeHidden({ timeout: 10_000 })
+  await expect(a.getByRole('heading', { name: 'LOOK WHAT YOU MADE.' })).toBeVisible({ timeout: 30_000 })
+  await expect(b.getByRole('heading', { name: 'LOOK WHAT YOU MADE.' })).toBeVisible({ timeout: 30_000 })
+  expect(await lastCapture(a)).toMatchObject({ round: 1 })
 
-  await pressReady(a) // the server returned to `ready` once both reported photo-complete
-  await pressReady(b)
-  await expect.poll(() => lastCapture(a), { timeout: 15_000 }).toMatchObject({ round: 2 })
-  await expect.poll(() => lastCapture(b), { timeout: 15_000 }).toMatchObject({ round: 2 })
+  await a.getByRole('button', { name: 'RETAKE' }).click() // enabled once the server is back in `ready`
+  await b.getByRole('button', { name: 'RETAKE' }).click()
+  await expect.poll(() => lastCapture(a), { timeout: 20_000 }).toMatchObject({ round: 2 })
+  await expect.poll(() => lastCapture(b), { timeout: 20_000 }).toMatchObject({ round: 2 })
 })
 
 test('leaving during the countdown cancels the capture', async ({ browser }) => {

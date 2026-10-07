@@ -19,6 +19,8 @@ interface Props {
   now: () => number
   onCountdownDone: () => void
   missed: boolean
+  exchanging: boolean
+  captured: boolean
 }
 
 export function Stage(p: Props) {
@@ -39,6 +41,10 @@ export function Stage(p: Props) {
 
       {p.countdown ? (
         <Countdown captureAt={p.countdown.captureAt} now={p.now} onDone={p.onCountdownDone} />
+      ) : p.exchanging ? (
+        <p className="font-black" aria-live="polite">
+          {p.captured ? 'YOU CAPTURED ✓ · ' : ''}WAITING FOR THE PHOTOS...
+        </p>
       ) : (
         <section className="flex flex-col gap-2">
           <p className="font-black">
