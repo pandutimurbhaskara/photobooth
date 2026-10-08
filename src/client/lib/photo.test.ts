@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { cellsOf, TEMPLATE_IDS } from '../../shared/plan'
 import {
   canvasToBlob,
   captureFrame,
@@ -6,7 +7,6 @@ import {
   fitWithin,
   FrameNotReadyError,
   layoutStrip,
-  photosNeeded,
   type CanvasLike,
 } from './photo'
 
@@ -115,8 +115,8 @@ describe('coverRect', () => {
 })
 
 describe('layoutStrip', () => {
-  it('vertical: two stacked cells and a footer', () => {
-    const g = layoutStrip('vertical')
+  it('duo2: two stacked cells and a footer (the old "vertical")', () => {
+    const g = layoutStrip('duo2')
     expect([g.width, g.height]).toEqual([1056, 1800])
     expect(g.cells).toEqual([
       { x: 48, y: 48, w: 960, h: 720 },
@@ -124,31 +124,32 @@ describe('layoutStrip', () => {
     ])
     expect(g.footer).toEqual({ x: 48, y: 1584, w: 960, h: 168 })
   })
-  it('horizontal: two side-by-side cells', () => {
-    const g = layoutStrip('horizontal')
-    expect([g.width, g.height]).toEqual([2064, 1032])
-    expect(g.cells.map((c) => [c.x, c.y])).toEqual([[48, 48], [1056, 48]])
+  it('strip4: four stacked cells', () => {
+    const g = layoutStrip('strip4')
+    expect([g.width, g.height]).toEqual([1056, 3336])
+    expect(g.cells.map((c) => c.y)).toEqual([48, 816, 1584, 2352])
   })
-  it('grid: A1|B1 over A2|B2, row-major', () => {
-    const g = layoutStrip('grid')
+  it('grid4: A over B, row-major (the old "grid")', () => {
+    const g = layoutStrip('grid4')
     expect([g.width, g.height]).toEqual([2064, 1800])
     expect(g.cells).toHaveLength(4)
     expect(g.cells[2]).toEqual({ x: 48, y: 816, w: 960, h: 720 })
   })
-  it('never overlaps cells and keeps everything inside the canvas', () => {
-    for (const layout of ['vertical', 'horizontal', 'grid'] as const) {
-      const g = layoutStrip(layout)
+  it('polaroid: one cell and a deep footer', () => {
+    const g = layoutStrip('polaroid')
+    expect([g.width, g.height]).toEqual([1056, 1032])
+    expect(g.cells).toEqual([{ x: 48, y: 48, w: 960, h: 720 }])
+  })
+  it('has exactly one cell per template cell, never overlaps, and stays inside the canvas', () => {
+    for (const template of TEMPLATE_IDS) {
+      const g = layoutStrip(template)
+      expect(g.cells).toHaveLength(cellsOf(template))
       for (const c of [...g.cells, g.footer]) {
         expect(c.x).toBeGreaterThanOrEqual(0)
         expect(c.y).toBeGreaterThanOrEqual(0)
         expect(c.x + c.w).toBeLessThanOrEqual(g.width)
         expect(c.y + c.h).toBeLessThanOrEqual(g.height)
       }
-    }
-  })
-  it('photosNeeded matches the number of cells', () => {
-    for (const layout of ['vertical', 'horizontal', 'grid'] as const) {
-      expect(photosNeeded(layout)).toBe(layoutStrip(layout).cells.length)
     }
   })
 })

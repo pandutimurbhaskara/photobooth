@@ -8,6 +8,8 @@ export default defineConfig({
         test: {
           name: 'unit',
           environment: 'node',
+          // Vitest blanks CSS by default, `?raw` imports included. Let raw CSS through so tests can read the design tokens.
+          css: { include: [/\.css\?raw$/] },
           include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
           exclude: [...configDefaults.exclude, 'src/worker/**'],
         },

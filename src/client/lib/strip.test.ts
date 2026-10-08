@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatStripDate, mulberry32, seedFromString } from './strip'
+import { cellPlacements, formatStripDate, mulberry32, seedFromString } from './strip'
 
 describe('formatStripDate', () => {
   it('formats DD MON YYYY in upper case with a zero-padded day', () => {
@@ -23,5 +23,22 @@ describe('seeded jitter', () => {
       expect(v).toBeGreaterThanOrEqual(0)
       expect(v).toBeLessThan(1)
     }
+  })
+})
+
+describe('cellPlacements', () => {
+  it('a USER 1 or USER 2 cell is one full photo of that person', () => {
+    expect(cellPlacements('a', 960, 720)).toEqual([{ who: 'a', dest: { x: 0, y: 0, w: 960, h: 720 } }])
+    expect(cellPlacements('b', 960, 720)).toEqual([{ who: 'b', dest: { x: 0, y: 0, w: 960, h: 720 } }])
+  })
+  it('a TOGETHER cell is USER 1 on the left half and USER 2 on the right, with no gap and no overlap', () => {
+    const [left, right] = cellPlacements('both', 960, 720)
+    expect(left).toEqual({ who: 'a', dest: { x: 0, y: 0, w: 480, h: 720 } })
+    expect(right).toEqual({ who: 'b', dest: { x: 480, y: 0, w: 480, h: 720 } })
+  })
+  it('splits an odd width exactly', () => {
+    const [left, right] = cellPlacements('both', 961, 720)
+    expect(left?.dest.w).toBe(480)
+    expect(right?.dest).toMatchObject({ x: 480, w: 481 })
   })
 })

@@ -1,4 +1,5 @@
 import { CELL_ASPECT, PHOTO_JPEG_QUALITY, PHOTO_MAX_EDGE } from '../../shared/constants'
+import { TEMPLATES, type TemplateId } from '../../shared/plan'
 
 // ---- capture ---------------------------------------------------------------------------------
 
@@ -83,7 +84,6 @@ export function coverRect(srcW: number, srcH: number, dstW: number, dstH: number
   return { sx: 0, sy: (srcH - sh) / 2, sw: srcW, sh }
 }
 
-export type StripLayout = 'vertical' | 'horizontal' | 'grid'
 export interface Rect {
   x: number
   y: number
@@ -103,17 +103,9 @@ export const STRIP_PAD = 48
 export const STRIP_GAP = 48
 export const STRIP_FOOTER_H = 168
 
-const GRID: Record<StripLayout, { cols: number; rows: number }> = {
-  vertical: { cols: 1, rows: 2 },
-  horizontal: { cols: 2, rows: 1 },
-  grid: { cols: 2, rows: 2 },
-}
-
-export const photosNeeded = (layout: StripLayout): number => GRID[layout].cols * GRID[layout].rows
-
 /** Pure geometry for a strip, so layout is testable without a canvas. Cells are row-major. */
-export function layoutStrip(layout: StripLayout): StripGeometry {
-  const { cols, rows } = GRID[layout]
+export function layoutStrip(template: TemplateId): StripGeometry {
+  const { cols, rows } = TEMPLATES[template]
   const width = STRIP_PAD * 2 + cols * CELL_W + (cols - 1) * STRIP_GAP
   const gridHeight = rows * CELL_H + (rows - 1) * STRIP_GAP
   const footerY = STRIP_PAD + gridHeight + STRIP_GAP

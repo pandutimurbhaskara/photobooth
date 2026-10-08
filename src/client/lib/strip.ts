@@ -1,6 +1,8 @@
+import type { CellKind, TemplateId } from '../../shared/plan'
 import { formatRoomCode } from '../../shared/room-code'
 import { applyFilter, type FilterId } from './filters'
-import { coverRect, layoutStrip, type Rect, type StripLayout } from './photo'
+import { PALETTE } from './palette'
+import { coverRect, layoutStrip, type Rect } from './photo'
 
 export const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'] as const
 
@@ -29,30 +31,54 @@ export function mulberry32(seed: number): () => number {
   }
 }
 
+/** What goes into one cell. `a` / `b` are the two people's photos (final pixels, already mirrored if the preview was). */
+export interface CellContent {
+  kind: CellKind
+  a?: ImageBitmap
+  b?: ImageBitmap
+  /** Seeds this cell's tilt: `${code}:${cell}:${keptRound}`, so both devices agree and a retake changes it. */
+  seed: string
+}
+
 export interface StripMeta {
   code: string
   dateLabel: string
-  /** Seeds the per-frame tilt; use `${code}:${round}` so both partners match. */
-  seed: string
   filter: FilterId
 }
 
-const PAPER = '#fff8e7'
-const INK = '#0a0a0a'
-const PINK = '#ff4fa3'
+const PAPER = PALETTE.paper
+const INK = PALETTE.ink
+const PINK = PALETTE.pink
 const FRAME_BORDER = 10
 const MAX_TILT_RAD = 0.014 // ≈ 0.8°
 const FONT = '"Space Grotesk Variable", system-ui, sans-serif'
 
-function drawCell(ctx: CanvasRenderingContext2D, bmp: ImageBitmap, cell: Rect, tilt: number, filter: FilterId): void {
-  // Crop to the cell on a scratch canvas first, so the filter only touches the photo (not paper or frame).
+/**
+ * Where each person's photo lands inside one cell, in the cell's own coordinates. A TOGETHER cell is split into two
+ * halves (spec D32); phase 2 replaces that with a cutout when a background is chosen. Pure, so it is unit-tested.
+ */
+export function cellPlacements(kind: CellKind, w: number, h: number): Array<{ who: 'a' | 'b'; dest: Rect }> {
+  if (kind === 'a' || kind === 'b') return [{ who: kind, dest: { x: 0, y: 0, w, h } }]
+  const half = Math.floor(w / 2)
+  return [
+    { who: 'a', dest: { x: 0, y: 0, w: half, h } },
+    { who: 'b', dest: { x: half, y: 0, w: w - half, h } },
+  ]
+}
+
+function drawCell(ctx: CanvasRenderingContext2D, content: CellContent, cell: Rect, tilt: number, filter: FilterId): void {
+  // Compose the cell on a scratch canvas first, so the filter only touches the photos (not paper or frame).
   const tile = document.createElement('canvas')
   tile.width = cell.w
   tile.height = cell.h
   const t = tile.getContext('2d')
   if (!t) throw new Error('2d canvas is unavailable')
-  const { sx, sy, sw, sh } = coverRect(bmp.width, bmp.height, cell.w, cell.h)
-  t.drawImage(bmp, sx, sy, sw, sh, 0, 0, cell.w, cell.h)
+  for (const { who, dest } of cellPlacements(content.kind, cell.w, cell.h)) {
+    const bmp = content[who]
+    if (!bmp) continue
+    const { sx, sy, sw, sh } = coverRect(bmp.width, bmp.height, dest.w, dest.h)
+    t.drawImage(bmp, sx, sy, sw, sh, dest.x, dest.y, dest.w, dest.h)
+  }
   if (filter !== 'original') {
     const pixels = t.getImageData(0, 0, cell.w, cell.h)
     applyFilter(pixels.data, filter)
@@ -89,26 +115,26 @@ function drawStar(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: numb
 
 /** Compose the photo strip. Fonts must be loaded first or canvas silently falls back to a system face. */
 export async function renderStrip(
-  bitmaps: readonly ImageBitmap[],
-  layout: StripLayout,
+  cells: readonly CellContent[],
+  template: TemplateId,
   meta: StripMeta,
 ): Promise<HTMLCanvasElement> {
   await document.fonts.load(`900 56px ${FONT}`)
-  const g = layoutStrip(layout)
+  const g = layoutStrip(template)
   const canvas = document.createElement('canvas')
   canvas.width = g.width
   canvas.height = g.height
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('2d canvas is unavailable')
-  const rand = mulberry32(seedFromString(meta.seed))
 
   ctx.fillStyle = PAPER
   ctx.fillRect(0, 0, g.width, g.height)
 
-  g.cells.forEach((cell, i) => {
-    const tilt = (rand() - 0.5) * 2 * MAX_TILT_RAD // always consume one value per cell so the sequence is stable
-    const bmp = bitmaps[i]
-    if (bmp) drawCell(ctx, bmp, cell, tilt, meta.filter)
+  g.cells.forEach((rect, i) => {
+    const content = cells[i]
+    if (!content) return
+    const tilt = (mulberry32(seedFromString(content.seed))() - 0.5) * 2 * MAX_TILT_RAD
+    drawCell(ctx, content, rect, tilt, meta.filter)
   })
 
   ctx.fillStyle = INK

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router'
 import { SYNC_BURST_READY } from '../../shared/constants'
+import { defaultPlan } from '../../shared/plan'
 import { otherSlot, type ServerMessage, type SlotName } from '../../shared/protocol'
 import { normalizeRoomInput } from '../../shared/room-code'
 import type { ConnKind } from '../components/ConnectionStatus'
@@ -15,7 +16,7 @@ import { browserCaptureDeps, createCaptureScheduler } from '../lib/capture'
 import { recordCapture } from '../lib/dev-hook'
 import { captureFrame, FrameNotReadyError } from '../lib/photo'
 import { parseControl, PhotoReceiver, sendPhoto } from '../lib/photo-transfer'
-import { completeRound, mergePhoto, pushRound, type Pending, type Round } from '../lib/rounds'
+import { completeRound, finishedOf, highestReferenced, mergePhoto, pruneStore, putRound, type Pending, type TakeStore } from '../lib/takes'
 import { getParticipantId } from '../lib/session'
 import { CameraGate } from '../screens/CameraGate'
 import { Lobby } from '../screens/Lobby'
@@ -29,6 +30,9 @@ const cameraProblem: Record<CameraError, ProblemKind> = {
   unavailable: 'camera-unavailable',
   unsupported: 'camera-unsupported',
 }
+
+/** Stable reference for "no room-state yet", so effects keyed on the plan do not fire every render. */
+const NO_PLAN = defaultPlan()
 
 function closedProblem(code: number | null): ProblemKind {
   switch (code) {
@@ -59,7 +63,8 @@ function BoothInner({ code }: { code: string }) {
   const slot = useRef<SlotName | null>(null)
   const [countdown, setCountdown] = useState<{ round: number; captureAt: number } | null>(null)
   const [missed, setMissed] = useState(false)
-  const [rounds, setRounds] = useState<Round[]>([])
+  const [store, setStore] = useState<TakeStore>(new Map())
+  const highestSeen = useRef(-1) // the newest round any plan has mentioned: anything newer is a photo pair still waiting to be recorded
   const [partnerMirrored, setPartnerMirrored] = useState(true) // until the partner's `cam` message says otherwise
   const [captured, setCaptured] = useState(false)
   const [exchangeFailed, setExchangeFailed] = useState(false) // the data channel itself failed to deliver our photo
@@ -110,6 +115,13 @@ function BoothInner({ code }: { code: string }) {
     onMessage: (m, isSnapshot) => onMessage.current(m, isSnapshot),
   })
 
+  const plan = room.state?.plan ?? NO_PLAN
+  // Keep only the photos the plan still needs; the store is the one place photos live.
+  useEffect(() => {
+    highestSeen.current = Math.max(highestSeen.current, highestReferenced(plan))
+    setStore((s) => pruneStore(s, plan, highestSeen.current))
+  }, [plan])
+
   // A photo from either side lands here; when both halves of a round exist it is stored and reported.
   const addPhoto = useLatest((round: number, who: 'own' | 'partner', blob: Blob) => {
     if (round <= completed.current) return
@@ -119,7 +131,7 @@ function BoothInner({ code }: { code: string }) {
     if (!done) return
     completed.current = round
     pending.current = null
-    setRounds((all) => pushRound(all, done))
+    setStore((all) => putRound(all, done))
     room.send({ type: 'photo-complete', round })
   })
   const receiver = useMemo(
@@ -192,11 +204,11 @@ function BoothInner({ code }: { code: string }) {
 
   // Photos live only in this tab, so warn before a reload or close throws them away.
   useEffect(() => {
-    if (rounds.length === 0) return
+    if (store.size === 0) return
     const warn = (e: BeforeUnloadEvent) => e.preventDefault()
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
-  }, [rounds.length])
+  }, [store.size])
 
   const phase = room.state?.phase
   useEffect(() => {
@@ -215,7 +227,7 @@ function BoothInner({ code }: { code: string }) {
   const mySlot = room.state?.you
   const partner = room.state && mySlot ? room.state.participants[otherSlot(mySlot)] : null
   const me = room.state && mySlot ? room.state.participants[mySlot] : null
-  const hasPhotos = rounds.length > 0
+  const hasPhotos = store.size > 0
   const status: ConnKind =
     room.status === 'reconnecting'
       ? 'reconnecting'
@@ -237,21 +249,16 @@ function BoothInner({ code }: { code: string }) {
 
   // A finished strip is the one thing that cannot be recreated and lives only in this tab. Never hide it behind a
   // failure screen (camera lost, socket closed, call dropped, partner gone): only a round in flight takes the screen back.
-  const latest = rounds[rounds.length - 1]
   const roundInFlight = room.status === 'open' && room.state?.phase === 'capture'
-  if (latest && !roundInFlight) {
+  const finished = finishedOf(plan, store)
+  if (finished && !roundInFlight) {
     return (
       <Result
-        rounds={rounds}
         code={code}
         status={status}
-        me={me}
-        partner={partner}
+        template={finished.template}
+        cells={finished.cells}
         partnerHere={Boolean(partner?.connected)}
-        canRetake={
-          room.status === 'open' && Boolean(partner?.connected) && room.state?.phase === 'ready' && sync.synced && rtc.channelOpen
-        }
-        onReady={onReady}
       />
     )
   }

@@ -1,8 +1,7 @@
 import { useMemo, useState } from 'react'
 import { APP_NAME } from '../../shared/constants'
-import type { PState } from '../../shared/protocol'
+import type { TemplateId } from '../../shared/plan'
 import { BoothHeader } from '../components/BoothHeader'
-import { BrutalBadge } from '../components/BrutalBadge'
 import { BrutalButton } from '../components/BrutalButton'
 import { BrutalCard } from '../components/BrutalCard'
 import { BrutalRadioGroup } from '../components/BrutalRadioGroup'
@@ -12,35 +11,25 @@ import { FilterPicker } from '../components/FilterPicker'
 import { PhotoStrip } from '../components/PhotoStrip'
 import { useStrip } from '../hooks/useStrip'
 import type { FilterId } from '../lib/filters'
-import { canvasToBlob, type StripLayout } from '../lib/photo'
-import { stripBlobs, type Round } from '../lib/rounds'
+import { canvasToBlob } from '../lib/photo'
 import { downloadBlob, formatStripDate, shareImage } from '../lib/strip'
+import type { CellBlobs } from '../lib/takes'
 
 interface Props {
   code: string
   status: ConnKind
-  rounds: Round[]
-  me: PState | null
-  partner: PState | null
+  template: TemplateId
+  cells: readonly CellBlobs[]
   partnerHere: boolean
-  canRetake: boolean
-  onReady: (ready: boolean) => void
 }
 
-export function Result({ code, status, rounds, me, partner, partnerHere, canRetake, onReady }: Props) {
+export function Result({ code, status, template, cells, partnerHere }: Props) {
   const toast = useToast()
-  const [layout, setLayout] = useState<StripLayout>('vertical')
   const [filter, setFilter] = useState<FilterId>('original')
   const [format, setFormat] = useState<'png' | 'jpg'>('png')
-  const latest = rounds[rounds.length - 1]
-  const blobs = useMemo(() => stripBlobs(layout, rounds), [layout, rounds])
-  const meta = useMemo(
-    () => ({ code, filter, dateLabel: formatStripDate(new Date()), seed: `${code}:${latest?.round ?? 0}` }),
-    [code, filter, latest?.round],
-  )
-  const { url, canvas, error } = useStrip(blobs, layout, meta)
-  const iAmReady = me?.ready ?? false
-  const filename = `${APP_NAME.toLowerCase()}-${code}-${latest?.round ?? 0}.${format}`
+  const meta = useMemo(() => ({ code, filter, dateLabel: formatStripDate(new Date()) }), [code, filter])
+  const { url, canvas, error } = useStrip(cells, template, meta)
+  const filename = `${APP_NAME.toLowerCase()}-${code}-${template}.${format}`
 
   async function encode(): Promise<Blob | null> {
     return canvas ? canvasToBlob(canvas, format === 'png' ? 'image/png' : 'image/jpeg', 0.92) : null
@@ -71,17 +60,6 @@ export function Result({ code, status, rounds, me, partner, partnerHere, canReta
       <PhotoStrip url={url} error={error} />
 
       <BrutalCard heavy className="flex flex-col gap-5 p-4">
-        <BrutalRadioGroup
-          legend="Layout"
-          name="layout"
-          value={layout}
-          onChange={setLayout}
-          options={[
-            { value: 'vertical', label: 'VERTICAL' },
-            { value: 'horizontal', label: 'HORIZONTAL' },
-            { value: 'grid', label: 'GRID', disabled: rounds.length < 2 },
-          ]}
-        />
         <FilterPicker value={filter} onChange={setFilter} />
         <BrutalRadioGroup
           legend="File type"
@@ -101,18 +79,6 @@ export function Result({ code, status, rounds, me, partner, partnerHere, canReta
       <BrutalButton tone="pink" className="w-full" disabled={!canvas} onClick={() => void share()}>
         SHARE
       </BrutalButton>
-
-      {partnerHere && (
-        <BrutalCard tone="lime" heavy className="flex flex-col gap-3 p-4">
-          <div className="flex flex-wrap gap-2">
-            <BrutalBadge tone={iAmReady ? 'ink' : 'paper'}>YOU {iAmReady ? 'READY ✓' : 'NOT READY'}</BrutalBadge>
-            <BrutalBadge tone={partner?.ready ? 'ink' : 'paper'}>THEM {partner?.ready ? 'READY ✓' : 'WAITING...'}</BrutalBadge>
-          </div>
-          <BrutalButton tone="ink" disabled={!canRetake} onClick={() => onReady(!iAmReady)}>
-            {iAmReady ? 'READY ✓' : 'RETAKE'}
-          </BrutalButton>
-        </BrutalCard>
-      )}
     </main>
   )
 }
