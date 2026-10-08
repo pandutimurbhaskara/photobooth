@@ -1,12 +1,15 @@
-import type { RefObject } from 'react'
-import type { PState } from '../../shared/protocol'
+import type { ReactNode, RefObject } from 'react'
+import type { Plan, PlanAction } from '../../shared/plan'
+import type { PState, SlotName } from '../../shared/protocol'
 import { BoothHeader } from '../components/BoothHeader'
-import { BrutalBadge } from '../components/BrutalBadge'
 import { BrutalButton } from '../components/BrutalButton'
 import { BrutalCard } from '../components/BrutalCard'
 import { CameraFrame } from '../components/CameraFrame'
 import type { ConnKind } from '../components/ConnectionStatus'
 import { Countdown } from '../components/Countdown'
+import { Steps } from '../components/Steps'
+import { FormatPanel } from './FormatPanel'
+import { ReadyCard } from './ReadyCard'
 
 interface Props {
   code: string
@@ -30,13 +33,49 @@ interface Props {
   captured: boolean
   canFlip: boolean
   onFlip: () => void
+  plan: Plan
+  mySlot: SlotName | null
+  /** Plan actions are accepted right now: two people present and no round in flight. */
+  canEdit: boolean
+  onPlan: (action: PlanAction) => void
 }
 
 export function Stage(p: Props) {
-  const iAmReady = p.me?.ready ?? false
+  const takeNo = (p.plan.takes[p.plan.cell]?.length ?? 0) + 1
+  const noTakesYet = p.plan.takes.every((t) => t.length === 0)
+
+  const ready = (heading: string, extra?: ReactNode) => (
+    <ReadyCard heading={heading} me={p.me} partner={p.partner} canReady={p.canReady} onReady={p.onReady} canFlip={p.canFlip} onFlip={p.onFlip}>
+      {extra}
+    </ReadyCard>
+  )
+
+  function panel(): ReactNode {
+    switch (p.plan.stage) {
+      case 'format':
+        return (
+          <FormatPanel plan={p.plan} mySlot={p.mySlot} canEdit={p.canEdit} onPlan={p.onPlan}>
+            {ready('BOTH READY?')}
+          </FormatPanel>
+        )
+      case 'shoot':
+        return ready(
+          `CELL ${p.plan.cell + 1} OF ${p.plan.kinds.length} · TAKE ${takeNo}`,
+          noTakesYet ? (
+            <BrutalButton tone="paper" disabled={!p.canEdit} onClick={() => p.onPlan({ k: 'reset' })}>
+              CHANGE FORMAT
+            </BrutalButton>
+          ) : null,
+        )
+      default:
+        return ready('BOTH READY?')
+    }
+  }
+
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col gap-5 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
       <BoothHeader code={p.code} status={p.status} hasPhotos={p.hasPhotos} />
+      <Steps stage={p.plan.stage} />
 
       <div className="relative">
         <div className="grid gap-6 md:grid-cols-2">
@@ -71,21 +110,7 @@ export function Stage(p: Props) {
           {p.captured ? 'YOU CAPTURED ✓ · ' : ''}WAITING FOR THE PHOTOS...
         </BrutalCard>
       ) : (
-        <BrutalCard tone="yellow" heavy className="sticky bottom-2 flex flex-col gap-3 p-4">
-          <h2 className="text-2xl font-black uppercase leading-none">BOTH READY?</h2>
-          <div className="flex flex-wrap gap-2">
-            <BrutalBadge tone={iAmReady ? 'lime' : 'paper'}>YOU {iAmReady ? 'READY ✓' : 'NOT READY'}</BrutalBadge>
-            <BrutalBadge tone={p.partner?.ready ? 'lime' : 'paper'}>THEM {p.partner?.ready ? 'READY ✓' : 'WAITING...'}</BrutalBadge>
-          </div>
-          <BrutalButton tone={iAmReady ? 'lime' : 'ink'} size="xl" disabled={!p.canReady} onClick={() => p.onReady(!iAmReady)}>
-            {iAmReady ? 'READY ✓' : "I'M READY"}
-          </BrutalButton>
-          {p.canFlip && (
-            <BrutalButton tone="paper" onClick={p.onFlip}>
-              FLIP CAMERA
-            </BrutalButton>
-          )}
-        </BrutalCard>
+        panel()
       )}
     </main>
   )

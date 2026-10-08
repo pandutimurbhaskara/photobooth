@@ -80,3 +80,13 @@ export function lastCapture(page: Page): Promise<Captured | null> {
     () => (window as unknown as { __booth?: { lastCapture?: Captured } }).__booth?.lastCapture ?? null,
   )
 }
+
+export const CELLS = { strip4: 4, grid4: 4, duo2: 2, polaroid: 1 } as const
+export type TemplateKey = keyof typeof CELLS
+const TEMPLATE_NAME: Record<TemplateKey, RegExp> = { strip4: /4 cut/i, grid4: /2 × 2/, duo2: /2 cut/i, polaroid: /polaroid/i }
+
+/** Pick a format from the cards. Either person can; the other's screen follows. */
+export async function chooseTemplate(page: Page, template: TemplateKey): Promise<void> {
+  // `.click()`, not `.check()`: the radio is controlled by the server's plan, so it only flips once the room-state returns.
+  await page.getByRole('radio', { name: TEMPLATE_NAME[template] }).click()
+}

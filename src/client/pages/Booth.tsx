@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router'
 import { SYNC_BURST_READY } from '../../shared/constants'
-import { defaultPlan } from '../../shared/plan'
+import { defaultPlan, type PlanAction } from '../../shared/plan'
 import { otherSlot, type ServerMessage, type SlotName } from '../../shared/protocol'
 import { normalizeRoomInput } from '../../shared/room-code'
 import type { ConnKind } from '../components/ConnectionStatus'
@@ -116,6 +116,8 @@ function BoothInner({ code }: { code: string }) {
   })
 
   const plan = room.state?.plan ?? NO_PLAN
+  const sendToRoom = room.send
+  const sendPlan = useCallback((action: PlanAction) => void sendToRoom({ type: 'plan', action }), [sendToRoom])
   // Keep only the photos the plan still needs; the store is the one place photos live.
   useEffect(() => {
     highestSeen.current = Math.max(highestSeen.current, highestReferenced(plan))
@@ -309,7 +311,7 @@ function BoothInner({ code }: { code: string }) {
       localVideoRef={localVideo}
       me={me}
       partner={partner}
-      canReady={sync.synced && rtc.peerState === 'connected' && rtc.channelOpen}
+      canReady={sync.synced && rtc.peerState === 'connected' && rtc.channelOpen && (plan.stage !== 'format' || plan.template !== null)}
       onReady={onReady}
       countdown={countdown}
       now={sync.now}
@@ -318,6 +320,10 @@ function BoothInner({ code }: { code: string }) {
       roundFailed={roundFailed}
       exchanging={room.state.phase === 'capture' && countdown === null}
       captured={captured}
+      plan={plan}
+      mySlot={mySlot ?? null}
+      canEdit={room.status === 'open' && room.state?.phase === 'ready'}
+      onPlan={sendPlan}
     />
   )
 }
