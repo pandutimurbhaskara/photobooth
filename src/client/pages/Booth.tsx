@@ -16,7 +16,7 @@ import { browserCaptureDeps, createCaptureScheduler } from '../lib/capture'
 import { recordCapture } from '../lib/dev-hook'
 import { captureFrame, FrameNotReadyError } from '../lib/photo'
 import { parseControl, PhotoReceiver, sendPhoto } from '../lib/photo-transfer'
-import { completeRound, finishedOf, highestReferenced, mergePhoto, pruneStore, putRound, type Pending, type TakeStore } from '../lib/takes'
+import { completeRound, finishedOf, highestReferenced, mergePhoto, missingRounds, pruneStore, putRound, type Finished, type Pending, type TakeStore } from '../lib/takes'
 import { getParticipantId } from '../lib/session'
 import { CameraGate } from '../screens/CameraGate'
 import { Lobby } from '../screens/Lobby'
@@ -123,6 +123,14 @@ function BoothInner({ code }: { code: string }) {
     highestSeen.current = Math.max(highestSeen.current, highestReferenced(plan))
     setStore((s) => pruneStore(s, plan, highestSeen.current))
   }, [plan])
+
+  // The finished strip is the one thing that cannot be recreated. Remember the last one, so it stays on screen
+  // even if the partner starts over or retakes while you are still looking at it (spec §5).
+  const live = useMemo(() => finishedOf(plan, store), [plan, store])
+  const [snapshot, setSnapshot] = useState<Finished | null>(null)
+  useEffect(() => {
+    if (live) setSnapshot(live)
+  }, [live])
 
   // A photo from either side lands here; when both halves of a round exist it is stored and reported.
   const addPhoto = useLatest((round: number, who: 'own' | 'partner', blob: Blob) => {
@@ -252,15 +260,28 @@ function BoothInner({ code }: { code: string }) {
   // A finished strip is the one thing that cannot be recreated and lives only in this tab. Never hide it behind a
   // failure screen (camera lost, socket closed, call dropped, partner gone): only a round in flight takes the screen back.
   const roundInFlight = room.status === 'open' && room.state?.phase === 'capture'
-  const finished = finishedOf(plan, store)
-  if (finished && !roundInFlight) {
+  const shown = live ?? snapshot
+  if (shown && !roundInFlight) {
+    const partnerChanged = !live // the plan moved on without us: say so, keep the strip
     return (
       <Result
         code={code}
         status={status}
-        template={finished.template}
-        cells={finished.cells}
+        template={shown.template}
+        cells={shown.cells}
         partnerHere={Boolean(partner?.connected)}
+        canRetake={room.status === 'open' && Boolean(partner?.connected) && room.state?.phase === 'ready'}
+        onRetake={(cell) => {
+          setSnapshot(null)
+          sendPlan({ k: 'retake', cell })
+        }}
+        notice={
+          partnerChanged
+            ? plan.stage === 'format'
+              ? { text: 'THEY STARTED OVER. SAVE YOUR STRIP.', action: 'NEW STRIP', onAction: () => setSnapshot(null) }
+              : { text: "THEY'RE RETAKING A CELL.", action: 'JOIN THEM', onAction: () => setSnapshot(null) }
+            : undefined
+        }
       />
     )
   }
@@ -325,6 +346,11 @@ function BoothInner({ code }: { code: string }) {
       mySlot={mySlot ?? null}
       canEdit={room.status === 'open' && room.state?.phase === 'ready'}
       onPlan={sendPlan}
+      lostPhotos={plan.stage !== 'format' && missingRounds(plan, store).length > 0}
+      onStartOver={() => {
+        setSnapshot(null)
+        sendPlan({ k: 'reset' })
+      }}
     />
   )
 }

@@ -41,6 +41,9 @@ interface Props {
   /** Plan actions are accepted right now: two people present and no round in flight. */
   canEdit: boolean
   onPlan: (action: PlanAction) => void
+  /** The plan points at photos this tab does not hold (it was reloaded). */
+  lostPhotos: boolean
+  onStartOver: () => void
 }
 
 export function Stage(p: Props) {
@@ -127,6 +130,14 @@ export function Stage(p: Props) {
       ) : p.exchanging ? (
         <BrutalCard tone="paper" heavy className="p-4 text-center text-xl font-black uppercase" role="status">
           {p.captured ? 'YOU CAPTURED ✓ · ' : ''}WAITING FOR THE PHOTOS...
+        </BrutalCard>
+      ) : p.lostPhotos ? (
+        <BrutalCard tone="orange" heavy className="flex flex-col gap-3 p-4" role="alert">
+          <p className="text-xl font-black uppercase leading-snug">YOUR PHOTOS WERE LOST WHEN THIS PAGE RELOADED</p>
+          <p className="text-sm font-black uppercase">THEY LIVE ONLY IN THE TAB THEY WERE TAKEN IN. START OVER TO MAKE A NEW STRIP.</p>
+          <BrutalButton tone="ink" onClick={p.onStartOver}>
+            START OVER
+          </BrutalButton>
         </BrutalCard>
       ) : (
         panel()
