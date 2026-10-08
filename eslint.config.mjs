@@ -5,7 +5,7 @@ import globals from 'globals'
 import tseslint from 'typescript-eslint'
 
 export default defineConfig([
-  globalIgnores(['dist', '.wrangler', '.superpowers', 'worker-configuration.d.ts', 'playwright-report', 'test-results', 'node_modules', 'coverage']),
+  globalIgnores(['dist', '.wrangler', '.superpowers', 'worker-configuration.d.ts', 'playwright-report', 'test-results', 'node_modules', 'coverage', 'public/vendor']),
   js.configs.recommended,
   tseslint.configs.recommended,
   { files: ['src/client/**/*.{ts,tsx}'], languageOptions: { globals: globals.browser } },
@@ -16,4 +16,5 @@ export default defineConfig([
   },
   { files: ['src/worker/**/*.ts', 'src/shared/**/*.ts'], languageOptions: { globals: globals.worker } },
   { files: ['*.config.ts', 'e2e/**/*.ts'], languageOptions: { globals: { ...globals.node, ...globals.browser } } },
+  { files: ['scripts/**/*.mjs'], languageOptions: { globals: globals.node } },
 ])
