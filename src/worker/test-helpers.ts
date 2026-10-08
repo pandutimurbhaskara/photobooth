@@ -7,12 +7,19 @@ const open: TestClient[] = []
 
 export class TestClient {
   messages: ServerMessage[] = []
+  /** Frames that are not JSON (e.g. the 'ok' keepalive reply). */
+  raw: string[] = []
   closeCode: number | null = null
   private wake: (() => void) | null = null
 
   constructor(readonly ws: WebSocket) {
     ws.addEventListener('message', (e) => {
-      this.messages.push(JSON.parse(e.data as string) as ServerMessage)
+      const text = e.data as string
+      try {
+        this.messages.push(JSON.parse(text) as ServerMessage)
+      } catch {
+        this.raw.push(text)
+      }
       this.wake?.()
     })
     ws.addEventListener('close', (e) => {
@@ -55,6 +62,12 @@ export class TestClient {
       const i = this.messages.findIndex((m) => m.type === type)
       return i < 0 ? undefined : (this.messages.splice(i, 1)[0] as Extract<ServerMessage, { type: T }>)
     }, type, ms)
+  }
+  takeRaw(text: string, ms = 2000): Promise<string> {
+    return this.until(() => {
+      const i = this.raw.indexOf(text)
+      return i < 0 ? undefined : this.raw.splice(i, 1)[0]
+    }, `raw "${text}"`, ms)
   }
   waitClose(ms = 2000): Promise<number> {
     return this.until(() => this.closeCode ?? undefined, 'close', ms)

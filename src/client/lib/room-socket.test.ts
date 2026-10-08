@@ -164,6 +164,49 @@ describe('RoomSocket', () => {
     expect(FakeWebSocket.instances).toHaveLength(1)
   })
 
+  // Final review I5: a half-open socket (carrier NAT dropped the mapping) looks "open" forever without a heartbeat.
+  describe('keepalive', () => {
+    it("sends a raw 'ka' every 20 s while open, and stays connected as long as anything keeps arriving", () => {
+      const { last } = make()
+      last().open()
+      expect(last().sent).toHaveLength(1) // just the join
+      for (let i = 1; i <= 4; i++) {
+        vi.advanceTimersByTime(20_000)
+        expect(last().sent[last().sent.length - 1]).toBe('ka')
+        last().raw('ok') // the server's auto-response
+      }
+      expect(FakeWebSocket.instances).toHaveLength(1)
+    })
+
+    it('treats 50 s of silence as a dead connection and reconnects', () => {
+      const { last, statuses } = make()
+      last().open()
+      last().message(STATE)
+      vi.advanceTimersByTime(61_000) // no reply to any keepalive
+      expect(statuses.some(([s]) => s === 'reconnecting')).toBe(true)
+      expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2)
+      expect(FakeWebSocket.instances[0]?.closedByClient).toBe(true)
+    })
+
+    it('stops pinging after close() and after a terminal close', () => {
+      const first = make()
+      first.last().open()
+      first.socket.close()
+      const before = first.last().sent.length
+      vi.advanceTimersByTime(120_000)
+      expect(first.last().sent).toHaveLength(before)
+
+      FakeWebSocket.instances = []
+      const second = make()
+      second.last().open()
+      second.last().drop(4403)
+      const sentBefore = second.last().sent.length
+      vi.advanceTimersByTime(120_000)
+      expect(second.last().sent).toHaveLength(sentBefore)
+      expect(FakeWebSocket.instances).toHaveLength(1)
+    })
+  })
+
   it('ignores frames that are not valid JSON, and keeps working afterwards', () => {
     const { last, messages } = make()
     last().open()

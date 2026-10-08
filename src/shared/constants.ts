@@ -18,6 +18,9 @@ export const MAX_CANDIDATE_CHARS = 2 * 1024
 export const BUCKET_CAPACITY = 60
 export const BUCKET_REFILL_PER_SEC = 10
 export const MAX_SOCKETS = 4
+// Heartbeat: the client sends a raw 'ka' (answered by the runtime with 'ok') and gives up on a silent socket.
+export const KEEPALIVE_MS = 20_000
+export const KEEPALIVE_DEAD_MS = 50_000
 
 export const CLOSE = {
   EXPIRED: 4000,

@@ -48,6 +48,8 @@ export class BoothRoom extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
+    // Keepalive without waking the object: the runtime answers a raw 'ka' with 'ok' itself (survives hibernation).
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ka', 'ok'))
     void ctx.blockConcurrencyWhile(async () => {
       this.rec = (await ctx.storage.get<RoomRecord>('room')) ?? null
     })

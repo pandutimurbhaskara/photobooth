@@ -231,6 +231,30 @@ describe('validation and limits', () => {
   })
 })
 
+// Final review I5: half-open sockets on mobile networks. A raw 'ka' is answered by the runtime itself, without waking the object.
+describe('keepalive', () => {
+  it("answers a raw 'ka' with 'ok' and keeps the socket open", async () => {
+    const code = await newRoom()
+    const a = await joinAs(code, 1)
+    a.sendRaw('ka')
+    expect(await a.takeRaw('ok')).toBe('ok')
+    a.send({ type: 'ping', clientTime: 5 })
+    expect((await a.take('pong')).clientTime).toBe(5) // still a normal, joined socket
+    expect(a.closeCode).toBeNull()
+  })
+
+  it("answers 'ka' even from a socket that has not joined yet, and keeps answering after the object is evicted", async () => {
+    const code = await newRoom()
+    const stub = env.BOOTH_ROOM.getByName(code)
+    const early = await openSocket(code)
+    early.sendRaw('ka')
+    expect(await early.takeRaw('ok')).toBe('ok')
+    await evictDurableObject(stub)
+    early.sendRaw('ka')
+    expect(await early.takeRaw('ok')).toBe('ok')
+  })
+})
+
 describe('expiry', () => {
   it('keeps a recently active room alive and re-arms the alarm', async () => {
     const code = await newRoom()

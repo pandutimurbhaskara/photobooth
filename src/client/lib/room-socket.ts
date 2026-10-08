@@ -1,4 +1,4 @@
-import { CLOSE } from '../../shared/constants'
+import { CLOSE, KEEPALIVE_DEAD_MS, KEEPALIVE_MS } from '../../shared/constants'
 import type { ClientMessage, ServerMessage } from '../../shared/protocol'
 
 export type SocketStatus = 'connecting' | 'open' | 'reconnecting' | 'closed'
@@ -26,6 +26,8 @@ export class RoomSocket {
   private timer: ReturnType<typeof setTimeout> | null = null
   private stopped = false
   private snapshotPending = true
+  private keepTimer: ReturnType<typeof setInterval> | null = null
+  private lastRx = 0
 
   constructor(private readonly o: RoomSocketOptions) {
     this.o.onStatus('connecting', null)
@@ -64,11 +66,15 @@ export class RoomSocket {
       if (this.ws !== ws) return
       this.attempt = 0
       this.downSince = null
+      this.lastRx = this.clock()
+      this.startKeepalive(ws)
       this.o.onStatus('open', null)
       ws.send(JSON.stringify({ type: 'join', participantId: this.o.participantId } satisfies ClientMessage))
     })
     ws.addEventListener('message', (e) => {
-      if (this.ws !== ws || typeof e.data !== 'string') return
+      if (this.ws !== ws) return
+      this.lastRx = this.clock() // anything at all proves the connection is alive, including the 'ok' keepalive reply
+      if (typeof e.data !== 'string') return
       let message: ServerMessage
       try {
         message = JSON.parse(e.data) as ServerMessage
@@ -82,6 +88,7 @@ export class RoomSocket {
     ws.addEventListener('close', (e) => {
       if (this.ws !== ws) return
       this.ws = null
+      this.stopKeepalive()
       this.onClosed(e.code)
     })
   }
@@ -93,7 +100,7 @@ export class RoomSocket {
       this.o.onStatus('closed', code)
       return
     }
-    const now = (this.o.now ?? Date.now)()
+    const now = this.clock()
     this.downSince ??= now
     if (now - this.downSince > (this.o.giveUpAfterMs ?? 60_000)) {
       this.stopped = true
@@ -110,7 +117,37 @@ export class RoomSocket {
     }, delay)
   }
 
+  private clock(): number {
+    return (this.o.now ?? Date.now)()
+  }
+
+  /** Ping every KEEPALIVE_MS; if nothing at all has arrived for KEEPALIVE_DEAD_MS the socket is half-open: drop it and reconnect. */
+  private startKeepalive(ws: WebSocket): void {
+    this.stopKeepalive()
+    this.keepTimer = setInterval(() => {
+      if (this.ws !== ws) return
+      if (this.clock() - this.lastRx > KEEPALIVE_DEAD_MS) {
+        this.stopKeepalive()
+        this.ws = null
+        try {
+          ws.close(1000)
+        } catch {
+          // already closed
+        }
+        this.onClosed(1006)
+      } else if (ws.readyState === WS_OPEN) {
+        ws.send('ka')
+      }
+    }, KEEPALIVE_MS)
+  }
+
+  private stopKeepalive(): void {
+    if (this.keepTimer !== null) clearInterval(this.keepTimer)
+    this.keepTimer = null
+  }
+
   private detach(): void {
+    this.stopKeepalive()
     const ws = this.ws
     this.ws = null
     if (!ws) return
