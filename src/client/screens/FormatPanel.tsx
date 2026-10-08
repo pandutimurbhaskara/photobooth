@@ -17,8 +17,10 @@ interface Props {
 }
 
 export function FormatPanel({ plan, mySlot, canEdit, onPlan, children }: Props) {
+  // A fragment, not a wrapper: the ready card is `sticky` and can only stick within its parent, which must be the
+  // page's <main> or it falls below the fold on a phone.
   return (
-    <div className="flex flex-col gap-4">
+    <>
       <BrutalCard heavy className="flex flex-col gap-4 p-4">
         <h2 className="text-2xl font-black uppercase leading-none">PICK A FORMAT</h2>
         <p className="text-sm font-black uppercase">EITHER OF YOU CAN CHOOSE.</p>
@@ -58,6 +60,6 @@ export function FormatPanel({ plan, mySlot, canEdit, onPlan, children }: Props) 
           ))}
       </BrutalCard>
       {children}
-    </div>
+    </>
   )
 }

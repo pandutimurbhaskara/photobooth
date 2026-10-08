@@ -1,6 +1,6 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
-import { BASE, closePlayers, connectedPair, createBooth, enterBooth, newPlayer, pressReady } from './helpers'
+import { BASE, chooseTemplate, closePlayers, connectedPair, createBooth, enterBooth, finishSession, newPlayer } from './helpers'
 
 test.afterEach(closePlayers)
 
@@ -25,6 +25,7 @@ test('landing, join and create screens have no WCAG A/AA violations', async ({ b
 })
 
 test('camera gate, lobby, stage, countdown and result have no violations', async ({ browser }) => {
+  test.setTimeout(180_000)
   const a = await newPlayer(browser)
   await createBooth(a)
   await expectNoViolations(a, 'camera gate')
@@ -34,10 +35,10 @@ test('camera gate, lobby, stage, countdown and result have no violations', async
   await a.close()
 
   const { a: left, b: right } = await connectedPair(browser)
-  await expectNoViolations(left, 'stage')
-  await pressReady(left)
-  await pressReady(right)
-  await expect(left.getByRole('heading', { name: 'LOOK WHAT YOU MADE.' })).toBeVisible({ timeout: 30_000 })
+  await expectNoViolations(left, 'format step')
+  await chooseTemplate(left, 'polaroid')
+  await expectNoViolations(left, 'format step with cells')
+  await finishSession(left, right, 'polaroid')
   await expectNoViolations(left, 'result')
 })
 

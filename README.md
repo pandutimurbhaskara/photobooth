@@ -109,8 +109,9 @@ capture, on the result screen only (there is no live filtered preview).
 
 ## Privacy and security
 
-- The Durable Object stores: room code, round counter, the two participant ids, ready flags and timestamps. No names,
-  IPs, media or photos. A room is deleted after an hour of silence.
+- The Durable Object stores: room code, round counter, the two participant ids, ready flags, the shared booth plan
+  (template, cell kinds, take round numbers) and timestamps. No names, IPs, media or photos. A room is deleted after an
+  hour of silence.
 - The participant id is a per-tab secret that never leaves the browser except to the server, and is never sent to the
   other participant.
 - Room codes are 6 characters from a 31-symbol alphabet (~29.7 bits) drawn with `crypto.getRandomValues` and rejection
@@ -128,11 +129,15 @@ capture, on the result screen only (there is no live filtered preview).
 ## Decisions and limits
 
 No audio. No R2. No server-side photo relay: if the data channel fails you see CAMERA CONNECTION FAILED rather than
-photos taking a detour through the server. The grid layout needs two rounds (RETAKE once). Only the last two rounds are
-kept. A leaver's slot is reserved for two minutes against strangers. The product name is a placeholder.
+photos taking a detour through the server. A session picks a format (4-cut, 2 × 2, 2-cut, Polaroid) and, per cell,
+USER 1, USER 2 or TOGETHER; each cell takes 2–3 takes and both people keep one; any single cell can be retaken from the
+finished screen. The shared choices live in the Durable Object as a small "plan" (enum ids and round numbers only);
+photos stay in the tabs. A leaver's slot is reserved for two minutes against strangers. The product name is a
+placeholder.
 
 Full design: [`docs/superpowers/specs/2026-10-07-photobooth-design.md`](docs/superpowers/specs/2026-10-07-photobooth-design.md)
-(decisions D1–D23). Implementation plan: `docs/superpowers/plans/`.
+(decisions D1–D23) and [`docs/superpowers/specs/2026-10-08-format-and-style-design.md`](docs/superpowers/specs/2026-10-08-format-and-style-design.md)
+(D24–D33: format, takes, retake, cutouts; supersedes D13/D14). Implementation plans: `docs/superpowers/plans/`.
 
 ## Manual test checklist (needs real devices)
 
@@ -162,13 +167,14 @@ Nothing was pushed or deployed.
 | Lint, fix all errors | **verified here** | `npm run lint` exits 0 |
 | Imports | **verified here** | covered by `tsc -b` and the production build |
 | Cloudflare bindings | **verified here** | `wrangler types` generates `BOOTH_ROOM`, `RL_CREATE`, `RL_LOOKUP`, `ASSETS`; worker tests exercise every binding; build output keeps the Durable Object `exports` |
-| Durable Object behaviour (workerd) | **verified here** | 55 worker tests: join/reclaim/full/leave, relay, ping, rate limit, expiry and capture-timeout alarms, hibernation, keepalive, ready/capture scheduling, ICE gating |
+| Durable Object behaviour (workerd) | **verified here** | 72 worker tests: join/reclaim/full/leave, relay, ping, rate limit, expiry and capture-timeout alarms, hibernation, keepalive, ready/capture scheduling, ICE gating, the shared plan (stages, takes, retake, reset, ready-clearing) |
 | Durable Object **deployment** | **not done** | needs `wrangler login` + `wrangler deploy` (interactive, publishes outward) |
 | WebSocket connections | **verified here** | worker tests + every e2e spec |
-| Two browsers simultaneously | **verified here** | 29 Playwright tests, two or three isolated Chromium contexts each |
+| Two browsers simultaneously | **verified here** | 38 Playwright tests (`npm run test:e2e`, 6.6 min), two or three isolated Chromium contexts each |
 | Synchronized capture | **verified here** | e2e: capture spread < 150 ms on one machine, repeated 10× with 0 failures. Real-device accuracy: checklist row 1 |
-| Photo generation | **verified here** | strip 1056×1800 / 2064×1032 / 2064×1800 asserted; B&W filter verified by pixel sampling |
+| Photo generation | **verified here** | strips 1056×1800 (2-cut) / 1056×1032 (Polaroid) / 2064×1800 (2 × 2) asserted in e2e; 4-cut 1056×3336 asserted at unit level; B&W filter verified by pixel sampling |
 | Download | **verified here** | PNG and JPG download events with the expected file names. File contents on real phones: row 8 |
+| Format, takes, pick, retake | **verified here** | e2e: format cards and per-cell kinds sync to both screens; READY clears when the plan changes; 2–3 takes; either person changes the kept take; retake one cell; a reload loses photos → START OVER; the partner's strip survives |
 | Camera permissions | **verified here (simulated)** | blocked / no camera / no camera API screens via a stubbed `getUserMedia`. Real browser permission prompts: row 2 |
 | Disconnect / reconnect | **verified here** | partner leaves mid-countdown, reload rejoins a full booth, second tab replaces the first, a partner whose call dies while their socket stays open (the strip stays downloadable), a capture message delivered 7 s late (MISSED IT, then the round recovers for both), socket backoff and keepalive unit-tested. Real network switch / locked phone: rows 4, 5 |
 | Mobile layout | **verified here (emulated)** | 390×844 Chromium: no sideways scroll, READY ≥ 48 px and on screen. Real phones: rows 1, 8 |

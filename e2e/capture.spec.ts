@@ -1,10 +1,11 @@
 import { expect, test } from '@playwright/test'
-import { closePlayers, connectedPair, lastCapture, pressReady } from './helpers'
+import { chooseTemplate, closePlayers, connectedPair, lastCapture, pressReady } from './helpers'
 
 test.afterEach(closePlayers)
 
 test('both browsers capture the same round at essentially the same moment', async ({ browser }) => {
   const { a, b } = await connectedPair(browser)
+  await chooseTemplate(a, 'duo2')
   await pressReady(a)
   await expect(a.getByText('YOU READY ✓')).toBeVisible()
   await pressReady(b)
@@ -22,22 +23,23 @@ test('both browsers capture the same round at essentially the same moment', asyn
   expect(Math.abs((ca?.wallAt ?? 0) - (cb?.wallAt ?? 0))).toBeLessThan(150)
 })
 
-test('a second round can follow the first', async ({ browser }) => {
+test('a second take follows the first in the same cell', async ({ browser }) => {
   const { a, b } = await connectedPair(browser)
+  await chooseTemplate(a, 'duo2')
   await pressReady(a)
   await pressReady(b)
-  await expect(a.getByRole('heading', { name: 'LOOK WHAT YOU MADE.' })).toBeVisible({ timeout: 30_000 })
-  await expect(b.getByRole('heading', { name: 'LOOK WHAT YOU MADE.' })).toBeVisible({ timeout: 30_000 })
+  for (const page of [a, b]) await expect(page.getByText(/CELL 1 OF 2 · TAKE 2/)).toBeVisible({ timeout: 30_000 })
   expect(await lastCapture(a)).toMatchObject({ round: 1 })
 
-  await a.getByRole('button', { name: 'RETAKE' }).click() // enabled once the server is back in `ready`
-  await b.getByRole('button', { name: 'RETAKE' }).click()
+  await pressReady(a) // enabled once the server is back in `ready`
+  await pressReady(b)
   await expect.poll(() => lastCapture(a), { timeout: 20_000 }).toMatchObject({ round: 2 })
   await expect.poll(() => lastCapture(b), { timeout: 20_000 }).toMatchObject({ round: 2 })
 })
 
 test('leaving during the countdown cancels the capture', async ({ browser }) => {
   const { a, b } = await connectedPair(browser)
+  await chooseTemplate(a, 'duo2')
   await pressReady(a)
   await pressReady(b)
   await expect(a.getByTestId('countdown')).toBeVisible()

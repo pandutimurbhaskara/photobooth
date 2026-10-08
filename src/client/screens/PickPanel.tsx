@@ -19,8 +19,9 @@ export function PickPanel({ plan, store, canEdit, onPlan, children }: Props) {
   const rounds = plan.takes[plan.cell] ?? []
   const kind = plan.kinds[plan.cell] ?? 'both'
   const kept = plan.kept[plan.cell] ?? null
+  // A fragment, not a wrapper: see FormatPanel — the sticky ready card must stay a direct child of <main>.
   return (
-    <div className="flex flex-col gap-4">
+    <>
       <BrutalCard heavy className="flex flex-col gap-4 p-4">
         <h2 className="text-2xl font-black uppercase leading-none">
           CELL {plan.cell + 1}: PICK THE BEST
@@ -54,6 +55,6 @@ export function PickPanel({ plan, store, canEdit, onPlan, children }: Props) {
         </BrutalButton>
       </BrutalCard>
       {children}
-    </div>
+    </>
   )
 }

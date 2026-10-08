@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { closePlayers, createBooth, enterBooth, expectRemoteVideo, newPlayer, pressReady } from './helpers'
+import { chooseTemplate, closePlayers, createBooth, enterBooth, expectRemoteVideo, finishSession, newPlayer, pressReady } from './helpers'
 
 test.afterEach(closePlayers)
 
@@ -36,6 +36,7 @@ test('a capture message that arrives far too late shows MISSED IT, and the round
   await expectRemoteVideo(a)
   await expectRemoteVideo(b)
 
+  await chooseTemplate(a, 'duo2')
   await pressReady(a)
   await pressReady(b)
 
@@ -50,19 +51,20 @@ test('a capture message that arrives far too late shows MISSED IT, and the round
   await expect(a.getByText('CAMERA CONNECTION FAILED')).toHaveCount(0) // … not a misleading network error
   await expect(a.getByRole('button', { name: /i'm ready/i })).toBeEnabled()
   await expect(b.getByRole('button', { name: /i'm ready/i })).toBeEnabled()
+  // Review Focus 3: the failed round recorded no take — both are still on take 1 of cell 1, and can still change format.
+  for (const page of [a, b]) await expect(page.getByText(/CELL 1 OF 2 · TAKE 1/)).toBeVisible()
+  await expect(a.getByRole('button', { name: 'CHANGE FORMAT' })).toBeVisible()
 
   // Both go again, this time with normal delivery, and it works.
   slow.ms = 0
   await pressReady(a)
   await pressReady(b)
-  for (const page of [a, b]) {
-    await expect(page.getByRole('heading', { name: 'LOOK WHAT YOU MADE.' })).toBeVisible({ timeout: 30_000 })
-  }
+  for (const page of [a, b]) await expect(page.getByText(/CELL 1 OF 2 · TAKE 2/)).toBeVisible({ timeout: 30_000 })
 })
 
 // Final review I4: a finished strip must never be hidden behind a connection-failure screen.
 test('the finished strip stays reachable when the partner connection dies without the socket closing', async ({ browser }) => {
-  test.setTimeout(120_000)
+  test.setTimeout(240_000)
   const a = await newPlayer(browser)
   const b = await newPlayer(browser)
   // Keep a handle on B's peer connections so the test can kill the call while B's WebSocket stays open.
@@ -84,8 +86,7 @@ test('the finished strip stays reachable when the partner connection dies withou
   await expectRemoteVideo(a)
   await expectRemoteVideo(b)
 
-  await pressReady(a)
-  await pressReady(b)
+  await finishSession(a, b, 'polaroid')
   const strip = a.getByRole('img', { name: 'Photo strip' })
   await expect(strip).toBeVisible({ timeout: 30_000 })
 
