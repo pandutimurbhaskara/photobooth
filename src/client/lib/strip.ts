@@ -1,5 +1,7 @@
 import type { CellKind, TemplateId } from '../../shared/plan'
 import { formatRoomCode } from '../../shared/room-code'
+import { drawBackground, type Scene } from './backgrounds'
+import { placePerson, type Cutout } from './cutout'
 import { applyFilter, type FilterId } from './filters'
 import { PALETTE } from './palette'
 import { coverRect, layoutStrip, type Rect } from './photo'
@@ -38,6 +40,9 @@ export interface CellContent {
   b?: ImageBitmap
   /** Seeds this cell's tilt: `${code}:${cell}:${keptRound}`, so both devices agree and a retake changes it. */
   seed: string
+  /** TOGETHER cells only: a background scene plus both people's cutouts replaces the side-by-side halves. */
+  scene?: Scene
+  cutouts?: { a?: Cutout; b?: Cutout }
 }
 
 export interface StripMeta {
@@ -73,11 +78,22 @@ function drawCell(ctx: CanvasRenderingContext2D, content: CellContent, cell: Rec
   tile.height = cell.h
   const t = tile.getContext('2d')
   if (!t) throw new Error('2d canvas is unavailable')
-  for (const { who, dest } of cellPlacements(content.kind, cell.w, cell.h)) {
-    const bmp = content[who]
-    if (!bmp) continue
-    const { sx, sy, sw, sh } = coverRect(bmp.width, bmp.height, dest.w, dest.h)
-    t.drawImage(bmp, sx, sy, sw, sh, dest.x, dest.y, dest.w, dest.h)
+  const cutA = content.cutouts?.a
+  const cutB = content.cutouts?.b
+  if (content.kind === 'both' && content.scene && cutA && cutB) {
+    // Both people cut out of their own photos, standing on one background (spec D31).
+    drawBackground(t, content.scene, { x: 0, y: 0, w: cell.w, h: cell.h }, mulberry32(seedFromString(`${content.seed}:scene`)))
+    for (const [who, cut] of [['a', cutA], ['b', cutB]] as const) {
+      const { src, dest } = placePerson(cut.bounds, { w: cell.w, h: cell.h }, who)
+      t.drawImage(cut.canvas, src.x, src.y, src.w, src.h, dest.x, dest.y, dest.w, dest.h)
+    }
+  } else {
+    for (const { who, dest } of cellPlacements(content.kind, cell.w, cell.h)) {
+      const bmp = content[who]
+      if (!bmp) continue
+      const { sx, sy, sw, sh } = coverRect(bmp.width, bmp.height, dest.w, dest.h)
+      t.drawImage(bmp, sx, sy, sw, sh, dest.x, dest.y, dest.w, dest.h)
+    }
   }
   if (filter !== 'original') {
     const pixels = t.getImageData(0, 0, cell.w, cell.h)

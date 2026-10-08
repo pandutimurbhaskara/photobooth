@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { APP_NAME } from '../../shared/constants'
 import type { TemplateId } from '../../shared/plan'
+import { BackgroundPicker } from '../components/BackgroundPicker'
 import { BoothHeader } from '../components/BoothHeader'
 import { BrutalButton } from '../components/BrutalButton'
 import { BrutalCard } from '../components/BrutalCard'
@@ -12,7 +13,9 @@ import { FilterPicker } from '../components/FilterPicker'
 import { PhotoStrip } from '../components/PhotoStrip'
 import { PhotoThumb } from '../components/PhotoThumb'
 import { Steps } from '../components/Steps'
+import { useCutouts } from '../hooks/useCutouts'
 import { useStrip } from '../hooks/useStrip'
+import type { BackgroundId } from '../lib/backgrounds'
 import type { FilterId } from '../lib/filters'
 import { canvasToBlob } from '../lib/photo'
 import { downloadBlob, formatStripDate, shareImage } from '../lib/strip'
@@ -36,8 +39,13 @@ export function Result({ code, status, template, cells, partnerHere, canRetake, 
   const [filter, setFilter] = useState<FilterId>('original')
   const [format, setFormat] = useState<'png' | 'jpg'>('png')
   const [confirming, setConfirming] = useState<number | null>(null)
+  const [background, setBackground] = useState<BackgroundId>('none')
   const meta = useMemo(() => ({ code, filter, dateLabel: formatStripDate(new Date()) }), [code, filter])
-  const { url, canvas, error } = useStrip(cells, template, meta)
+  const hasTogether = cells.some((c) => c.kind === 'both')
+  const wantsCutout = background !== 'none' && hasTogether
+  const cut = useCutouts(cells, wantsCutout)
+  const scene = wantsCutout && cut.status === 'ready' ? background : null // `wantsCutout` already rules out 'none'
+  const { url, canvas, error } = useStrip(cells, template, meta, scene, cut.byKey)
   const filename = `${APP_NAME.toLowerCase()}-${code}-${template}.${format}`
 
   async function encode(): Promise<Blob | null> {
@@ -78,6 +86,22 @@ export function Result({ code, status, template, cells, partnerHere, canRetake, 
       <PhotoStrip url={url} error={error} />
 
       <BrutalCard heavy className="flex flex-col gap-5 p-4">
+        {hasTogether && (
+          <div className="flex flex-col gap-2">
+            <BackgroundPicker value={background} onChange={setBackground} />
+            {cut.status === 'loading' && (
+              <p role="status" className="text-sm font-black uppercase">
+                CUTTING YOU OUT…
+              </p>
+            )}
+            {cut.status === 'failed' && (
+              <p role="status" className="border-[3px] border-ink bg-orange p-2 text-sm font-black uppercase">
+                COULDN'T CUT YOU OUT. SHOWING SIDE BY SIDE.
+              </p>
+            )}
+            <p className="text-xs font-black uppercase">CUTOUTS ARE MADE ON YOUR DEVICE.</p>
+          </div>
+        )}
         <FilterPicker value={filter} onChange={setFilter} />
         <BrutalRadioGroup
           legend="File type"
