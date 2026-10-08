@@ -6,6 +6,8 @@ import {
   CAPTURE_LEAD_MS,
   CLOSE,
   EXCHANGE_TIMEOUT_MS,
+  ICE_PER_HOUR,
+  ICE_WINDOW_MS,
   MAX_SOCKETS,
   ROOM_IDLE_MS,
   SLOT_GRACE_MS,
@@ -29,6 +31,8 @@ interface RoomRecord {
   round: number
   captureAt: number | null
   slots: Partial<Record<SlotName, Slot>>
+  /** TURN credentials minted for this room in the current window. */
+  ice?: { since: number; count: number }
 }
 interface Attachment {
   slot: SlotName
@@ -70,6 +74,21 @@ export class BoothRoom extends DurableObject<Env> {
     if (!this.rec) return { exists: false, full: false }
     const isMember = participantId !== null && this.slotOf(participantId) !== null
     return { exists: true, full: !isMember && this.freeSlot(Date.now()) === null }
+  }
+
+  /**
+   * May this participant mint another ICE/TURN credential? Only people actually in the room, and only a few per hour
+   * per room — otherwise anyone who learns a room code could drain the TURN allowance.
+   */
+  async iceAllowed(participantId: string): Promise<'ok' | 'not-member' | 'quota'> {
+    if (!this.rec || this.slotOf(participantId) === null) return 'not-member'
+    const rec = this.room
+    const now = Date.now()
+    if (!rec.ice || now - rec.ice.since > ICE_WINDOW_MS) rec.ice = { since: now, count: 0 }
+    if (rec.ice.count >= ICE_PER_HOUR) return 'quota'
+    rec.ice.count += 1
+    this.save()
+    return 'ok'
   }
 
   // ---- WebSocket upgrade ------------------------------------------------------------------

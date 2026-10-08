@@ -2,7 +2,8 @@ import { env } from 'cloudflare:workers'
 import { afterEach, describe, expect, it } from 'vitest'
 import { isValidRoomCode } from '../shared/room-code'
 import worker from './index'
-import { newRoom } from './test-helpers'
+import { ICE_PER_HOUR } from '../shared/constants'
+import { joinAs, newRoom, pid } from './test-helpers'
 
 // The handler is typed for requests arriving from the edge, which carry IncomingRequestCfProperties.
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>
@@ -87,17 +88,57 @@ describe('GET /api/rooms/:code/ws', () => {
   })
 })
 
+// Final review I6: once TURN is enabled every successful call mints a credential that costs relay bandwidth.
 describe('GET /api/ice', () => {
-  it('404 for an unknown room, 400 for a bad one, STUN for a real one', async () => {
-    expect((await call('/api/ice?room=ZZZZZZ')).status).toBe(404)
-    expect((await call('/api/ice?room=bad')).status).toBe(400)
-    expect((await call('/api/ice')).status).toBe(400)
+  const ice = (code: string, headers: Record<string, string> = {}) =>
+    call(`/api/ice?room=${code}`, { headers: { Origin: 'https://booth.test', ...headers } })
+
+  it('400 for a bad room, 404 for an unknown one', async () => {
+    expect((await call('/api/ice?room=bad', { headers: { Origin: 'https://booth.test' } })).status).toBe(400)
+    expect((await call('/api/ice', { headers: { Origin: 'https://booth.test' } })).status).toBe(400)
+    expect((await ice('ZZZZZZ', { 'x-participant-id': pid(1) })).status).toBe(404)
+  })
+
+  it('serves STUN to a member of the room', async () => {
     const code = await newRoom()
-    const res = await call(`/api/ice?room=${code}`)
+    await joinAs(code, 1)
+    const res = await ice(code, { 'x-participant-id': pid(1) })
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] })
   })
-  it('is rate limited', async () => {
+
+  it('refuses someone who is not in the room: no id, a malformed id, or a stranger', async () => {
+    const code = await newRoom()
+    await joinAs(code, 1)
+    expect((await ice(code)).status).toBe(403)
+    expect((await ice(code, { 'x-participant-id': 'not valid!' })).status).toBe(403)
+    expect((await ice(code, { 'x-participant-id': pid(9) })).status).toBe(403)
+  })
+
+  it('accepts a same-site browser fetch (no Origin on a same-origin GET, but Sec-Fetch-Site) and refuses foreign callers', async () => {
+    const code = await newRoom()
+    await joinAs(code, 1)
+    const member = { 'x-participant-id': pid(1) }
+    const noOrigin = (extra: Record<string, string>) => call(`/api/ice?room=${code}`, { headers: { ...member, ...extra } })
+    expect((await noOrigin({ 'Sec-Fetch-Site': 'same-origin' })).status).toBe(200)
+    expect((await noOrigin({})).status).toBe(403)
+    expect((await noOrigin({ 'Sec-Fetch-Site': 'cross-site' })).status).toBe(403)
+    expect((await ice(code, { ...member, Origin: 'https://evil.test' })).status).toBe(403)
+  })
+
+  it('caps how many credentials one room can mint per hour, and other rooms are unaffected', async () => {
+    const code = await newRoom()
+    await joinAs(code, 1)
+    const member = { 'x-participant-id': pid(1) }
+    for (let i = 0; i < ICE_PER_HOUR; i++) expect((await ice(code, member)).status).toBe(200)
+    expect((await ice(code, member)).status).toBe(429)
+
+    const other = await newRoom()
+    await joinAs(other, 1)
+    expect((await ice(other, member)).status).toBe(200)
+  })
+
+  it('is rate limited per IP', async () => {
     expect((await call('/api/ice?room=ZZZZZZ', undefined, limited('RL_LOOKUP'))).status).toBe(429)
   })
 })

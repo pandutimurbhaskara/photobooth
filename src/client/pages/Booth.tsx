@@ -129,6 +129,7 @@ function BoothInner({ code }: { code: string }) {
 
   const rtc = useWebRTC({
     code,
+    participantId,
     send: room.send,
     localStream: camera.stream,
     onChannelText: (text) => {

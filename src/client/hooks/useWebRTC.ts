@@ -6,15 +6,16 @@ import { useLatest } from './useLatest'
 
 interface Args {
   code: string
+  participantId: string
   send: (message: ClientMessage) => boolean
   localStream: MediaStream | null
   onChannelText: (text: string) => void
   onChannelBinary: (data: ArrayBuffer) => void
 }
 
-async function fetchIceServers(code: string): Promise<IceServerConfig[]> {
+async function fetchIceServers(code: string, participantId: string): Promise<IceServerConfig[]> {
   try {
-    const res = await fetch(`/api/ice?room=${code}`)
+    const res = await fetch(`/api/ice?room=${code}`, { headers: { 'x-participant-id': participantId } })
     if (res.ok) return ((await res.json()) as { iceServers: IceServerConfig[] }).iceServers
   } catch {
     // fall through to the public default
@@ -46,7 +47,7 @@ export function useWebRTC(args: Args) {
       const gen = generation.current
       const a = latest.current
       if (!a.localStream) return
-      const iceServers = await fetchIceServers(a.code)
+      const iceServers = await fetchIceServers(a.code, a.participantId)
       if (gen !== generation.current) return // superseded while fetching
       const peer = new Peer({
         iceServers,

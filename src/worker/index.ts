@@ -24,6 +24,15 @@ function sameHost(request: Request, url: URL): boolean {
   }
 }
 
+/**
+ * For plain fetches: browsers omit Origin on a same-origin GET, but always send Sec-Fetch-Site (a header scripts cannot set).
+ * A WebSocket upgrade always carries Origin, which is why `sameHost` alone is enough there.
+ */
+function sameSite(request: Request, url: URL): boolean {
+  if (request.headers.get('Origin') !== null) return sameHost(request, url)
+  return request.headers.get('Sec-Fetch-Site') === 'same-origin'
+}
+
 async function createRoom(request: Request, env: Env): Promise<Response> {
   if (!(await env.RL_CREATE.limit({ key: clientKey(request, 'create') })).success) {
     return json({ error: 'rate-limited' }, 429)
@@ -57,9 +66,15 @@ async function socket(request: Request, env: Env, url: URL, code: string): Promi
   return env.BOOTH_ROOM.getByName(code).fetch(request)
 }
 
-async function ice(env: Env, code: string): Promise<Response> {
-  const status = await env.BOOTH_ROOM.getByName(code).status(null)
-  if (!status.exists) return json({ error: 'room-not-found' }, 404)
+/** Mints (possibly TURN) credentials, so: same-site callers only, who are in the room, a few per hour per room. */
+async function ice(request: Request, env: Env, url: URL, code: string): Promise<Response> {
+  if (!sameSite(request, url)) return json({ error: 'forbidden-origin' }, 403)
+  const room = env.BOOTH_ROOM.getByName(code)
+  if (!(await room.status(null)).exists) return json({ error: 'room-not-found' }, 404)
+  const raw = request.headers.get('x-participant-id')
+  const verdict = raw !== null && PARTICIPANT_ID_RE.test(raw) ? await room.iceAllowed(raw) : 'not-member'
+  if (verdict === 'not-member') return json({ error: 'not-a-member' }, 403)
+  if (verdict === 'quota') return json({ error: 'rate-limited' }, 429)
   return json({ iceServers: await buildIceServers(env) })
 }
 
@@ -73,7 +88,7 @@ export default {
 
     if (request.method === 'GET' && pathname === '/api/ice') {
       const code = url.searchParams.get('room') ?? ''
-      return (await guard(request, env, code)) ?? ice(env, code)
+      return (await guard(request, env, code)) ?? ice(request, env, url, code)
     }
 
     const ws = ROOM_WS.exec(pathname)
