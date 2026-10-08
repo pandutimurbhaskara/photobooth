@@ -9,6 +9,8 @@ import type { ConnKind } from '../components/ConnectionStatus'
 import { Countdown } from '../components/Countdown'
 import { Steps } from '../components/Steps'
 import { FormatPanel } from './FormatPanel'
+import type { TakeStore } from '../lib/takes'
+import { PickPanel } from './PickPanel'
 import { ReadyCard } from './ReadyCard'
 
 interface Props {
@@ -34,6 +36,7 @@ interface Props {
   canFlip: boolean
   onFlip: () => void
   plan: Plan
+  store: TakeStore
   mySlot: SlotName | null
   /** Plan actions are accepted right now: two people present and no round in flight. */
   canEdit: boolean
@@ -44,8 +47,18 @@ export function Stage(p: Props) {
   const takeNo = (p.plan.takes[p.plan.cell]?.length ?? 0) + 1
   const noTakesYet = p.plan.takes.every((t) => t.length === 0)
 
-  const ready = (heading: string, extra?: ReactNode) => (
-    <ReadyCard heading={heading} me={p.me} partner={p.partner} canReady={p.canReady} onReady={p.onReady} canFlip={p.canFlip} onFlip={p.onFlip}>
+  const ready = (heading: string, extra?: ReactNode, labels?: { idle: string; done: string }) => (
+    <ReadyCard
+      heading={heading}
+      idleLabel={labels?.idle}
+      doneLabel={labels?.done}
+      me={p.me}
+      partner={p.partner}
+      canReady={p.canReady}
+      onReady={p.onReady}
+      canFlip={p.canFlip}
+      onFlip={p.onFlip}
+    >
       {extra}
     </ReadyCard>
   )
@@ -66,6 +79,12 @@ export function Stage(p: Props) {
               CHANGE FORMAT
             </BrutalButton>
           ) : null,
+        )
+      case 'pick':
+        return (
+          <PickPanel plan={p.plan} store={p.store} canEdit={p.canEdit} onPlan={p.onPlan}>
+            {ready('SAME PICK FOR BOTH?', null, { idle: 'KEEP THIS ONE', done: 'KEPT ✓' })}
+          </PickPanel>
         )
       default:
         return ready('BOTH READY?')

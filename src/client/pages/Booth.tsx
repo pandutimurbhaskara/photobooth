@@ -321,6 +321,7 @@ function BoothInner({ code }: { code: string }) {
       exchanging={room.state.phase === 'capture' && countdown === null}
       captured={captured}
       plan={plan}
+      store={store}
       mySlot={mySlot ?? null}
       canEdit={room.status === 'open' && room.state?.phase === 'ready'}
       onPlan={sendPlan}

@@ -90,3 +90,30 @@ export async function chooseTemplate(page: Page, template: TemplateKey): Promise
   // `.click()`, not `.check()`: the radio is controlled by the server's plan, so it only flips once the room-state returns.
   await page.getByRole('radio', { name: TEMPLATE_NAME[template] }).click()
 }
+
+const KEEP = /keep this one/i
+
+/** Shoot `takes` rounds of the current cell (both press ready each time), then wait for the pick panel on both screens. */
+export async function shootCell(a: Page, b: Page, takes = 2): Promise<void> {
+  for (let t = 0; t < takes; t++) {
+    await pressReady(a)
+    await pressReady(b)
+  }
+  for (const page of [a, b]) await expect(page.getByRole('button', { name: KEEP })).toBeVisible({ timeout: 40_000 })
+}
+
+/** Both agree on the pick (the preselected, newest take unless someone changed it). */
+export async function keepCell(a: Page, b: Page): Promise<void> {
+  await a.getByRole('button', { name: KEEP }).click()
+  await b.getByRole('button', { name: KEEP }).click()
+}
+
+/** The whole session: pick a format, shoot and keep every cell. Ends on the finished strip on both screens. */
+export async function finishSession(a: Page, b: Page, template: TemplateKey = 'duo2'): Promise<void> {
+  await chooseTemplate(a, template)
+  for (let cell = 0; cell < CELLS[template]; cell++) {
+    await shootCell(a, b)
+    await keepCell(a, b)
+  }
+  for (const page of [a, b]) await expect(page.getByRole('heading', { name: 'LOOK WHAT YOU MADE.' })).toBeVisible({ timeout: 30_000 })
+}
