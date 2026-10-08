@@ -27,6 +27,21 @@ export async function openCamera(deviceId?: string): Promise<MediaStream> {
   })
 }
 
+/**
+ * Calls `onEnded` when the stream's video track ends (permission revoked, camera unplugged, taken by another app).
+ * Without this the preview just freezes while everything still looks connected. Returns an unsubscribe.
+ */
+export function watchTrackEnded(stream: Pick<MediaStream, 'getVideoTracks'>, onEnded: () => void): () => void {
+  const track = stream.getVideoTracks()[0]
+  if (!track) return () => {}
+  if (track.readyState === 'ended') {
+    onEnded()
+    return () => {}
+  }
+  track.addEventListener('ended', onEnded, { once: true })
+  return () => track.removeEventListener('ended', onEnded)
+}
+
 export async function listVideoInputs(): Promise<MediaDeviceInfo[]> {
   const all = await navigator.mediaDevices.enumerateDevices()
   return all.filter((d) => d.kind === 'videoinput')

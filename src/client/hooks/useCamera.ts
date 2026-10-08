@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { classifyCameraError, isMirrored, listVideoInputs, openCamera, type CameraError } from '../lib/camera'
+import { classifyCameraError, isMirrored, listVideoInputs, openCamera, watchTrackEnded, type CameraError } from '../lib/camera'
 
 export function useCamera() {
   const [stream, setStream] = useState<MediaStream | null>(null)
@@ -43,6 +43,9 @@ export function useCamera() {
   }, [adopt, start, stopCurrent])
 
   useEffect(() => stopCurrent, [stopCurrent])
+
+  // A camera that disappears mid-booth surfaces the same "no camera" screen (with TRY AGAIN) instead of a frozen preview.
+  useEffect(() => (stream ? watchTrackEnded(stream, () => setError('unavailable')) : undefined), [stream])
 
   const track = stream?.getVideoTracks()[0]
   return { stream, error, mirrored: track ? isMirrored(track) : true, canFlip, start, flip }

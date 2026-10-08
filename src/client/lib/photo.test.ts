@@ -64,6 +64,33 @@ describe('captureFrame', () => {
     await expect(captureFrame(v, { mirrored: false }, (w, h) => fakeCanvas(w, h))).rejects.toBeInstanceOf(FrameNotReadyError)
   })
 
+  // Final review I3: a backgrounded tab or a revoked permission leaves a frozen/black frame that still has dimensions.
+  describe('a camera track that is no longer delivering live frames', () => {
+    const withTrack = (track: { readyState: string; muted: boolean } | null) =>
+      ({
+        videoWidth: 640,
+        videoHeight: 480,
+        readyState: 4,
+        srcObject: track ? { getVideoTracks: () => [track] } : { getVideoTracks: () => [] },
+      }) as unknown as HTMLVideoElement
+
+    it.each([
+      ['ended', { readyState: 'ended', muted: false }],
+      ['muted (backgrounded / taken by another app)', { readyState: 'live', muted: true }],
+    ])('refuses to capture from a %s track', async (_name, track) => {
+      await expect(captureFrame(withTrack(track), { mirrored: false }, (w, h) => fakeCanvas(w, h))).rejects.toBeInstanceOf(
+        FrameNotReadyError,
+      )
+    })
+
+    it('captures from a live, unmuted track (and when the video has no stream object to inspect)', async () => {
+      const live = await captureFrame(withTrack({ readyState: 'live', muted: false }), { mirrored: false }, (w, h) => fakeCanvas(w, h))
+      expect(live.type).toBe('image/jpeg')
+      const none = await captureFrame(withTrack(null), { mirrored: false }, (w, h) => fakeCanvas(w, h))
+      expect(none.type).toBe('image/jpeg')
+    })
+  })
+
   it('rejects when the encoder produces nothing', async () => {
     await expect(
       captureFrame(video(640, 480), { mirrored: false }, (w, h) => fakeCanvas(w, h, { failEncode: true })),

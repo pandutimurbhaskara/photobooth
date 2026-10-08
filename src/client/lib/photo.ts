@@ -52,6 +52,11 @@ export async function captureFrame(
 ): Promise<Blob> {
   const { videoWidth, videoHeight } = video
   if (!videoWidth || !videoHeight || video.readyState < 2) throw new FrameNotReadyError()
+  // A backgrounded tab, a revoked permission or another app taking the camera leaves a frozen or black frame that
+  // still has dimensions, so also require the track itself to be live and unmuted.
+  const stream = video.srcObject as { getVideoTracks?: () => Array<{ readyState: string; muted: boolean }> } | null
+  const track = stream?.getVideoTracks?.()[0]
+  if (track && (track.readyState !== 'live' || track.muted)) throw new FrameNotReadyError()
   const { w, h } = fitWithin(videoWidth, videoHeight, PHOTO_MAX_EDGE)
   const canvas = makeCanvas(w, h)
   const ctx = canvas.getContext('2d')
