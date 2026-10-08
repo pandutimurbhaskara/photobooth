@@ -130,9 +130,15 @@ export class BoothRoom extends DurableObject<Env> {
   async alarm(): Promise<void> {
     const rec = this.rec
     if (!rec) return
-    const due = rec.lastActivityAt + ROOM_IDLE_MS
-    if (Date.now() < due) {
-      await this.ctx.storage.setAlarm(due) // activity since arming: try again later
+    const now = Date.now()
+    if (rec.captureAt !== null && now >= rec.captureAt + EXCHANGE_TIMEOUT_MS) {
+      // A round whose photo exchange never finished: nobody is going to send anything, so tell them it is over.
+      rec.captureAt = null
+      this.save()
+      this.broadcastState()
+    }
+    if (now < rec.lastActivityAt + ROOM_IDLE_MS) {
+      await this.rearm() // still in use: look again at the next deadline
       return
     }
     for (const ws of this.ctx.getWebSockets()) {
@@ -244,6 +250,7 @@ export class BoothRoom extends DurableObject<Env> {
     }
     const message: ServerMessage = { type: 'capture-scheduled', captureAt: rec.captureAt, round: rec.round }
     for (const s of this.live()) this.send(s.ws, message)
+    void this.rearm() // wake the room if this round's exchange never finishes
   }
 
   /** Token bucket per socket; resets when the object wakes from hibernation, which is fine. */
@@ -259,6 +266,15 @@ export class BoothRoom extends DurableObject<Env> {
   }
 
   // ---- State helpers ----------------------------------------------------------------------
+
+  /** One alarm serves two deadlines: the in-flight round's exchange timeout and the room's idle expiry; arm whichever is sooner. */
+  private async rearm(): Promise<void> {
+    const rec = this.rec
+    if (!rec) return
+    const idleDue = rec.lastActivityAt + ROOM_IDLE_MS
+    const due = rec.captureAt !== null ? Math.min(idleDue, rec.captureAt + EXCHANGE_TIMEOUT_MS) : idleDue
+    await this.ctx.storage.setAlarm(due)
+  }
 
   private get room(): RoomRecord {
     if (!this.rec) throw new Error('room was never created')

@@ -418,6 +418,32 @@ describe('round lifecycle', () => {
     expect(state.state).toMatchObject({ phase: 'waiting', captureAt: null })
   })
 
+  // Final review I1: nothing used to wake the room when a round's exchange timed out, so both people could sit in
+  // "WAITING FOR THE PHOTOS..." indefinitely.
+  it('arms an alarm for when this round would time out', async () => {
+    const { stub } = await startRound()
+    const [alarmAt, captureAt] = await runInDurableObject(stub, async (instance, state) => [
+      await state.storage.getAlarm(),
+      peek(instance).rec.captureAt,
+    ])
+    expect(captureAt).not.toBeNull()
+    expect(alarmAt).not.toBeNull()
+    expect(alarmAt as number).toBeLessThanOrEqual((captureAt as number) + EXCHANGE_TIMEOUT_MS)
+  })
+
+  it('pushes everyone back to ready when the exchange times out, without anyone sending anything', async () => {
+    const { a, b, stub } = await startRound()
+    await runInDurableObject(stub, (instance) => {
+      peek(instance).rec.captureAt = Date.now() - EXCHANGE_TIMEOUT_MS - 1
+    })
+    expect(await runDurableObjectAlarm(stub)).toBe(true)
+    for (const client of [a, b]) {
+      const state = await client.take('room-state')
+      expect(state.state).toMatchObject({ phase: 'ready', captureAt: null })
+    }
+    expect((await stub.status(null)).exists).toBe(true) // and the room itself is still alive
+  })
+
   it('drops a capture whose exchange never finished once EXCHANGE_TIMEOUT_MS has passed', async () => {
     const { a, stub } = await startRound()
     await runInDurableObject(stub, (instance) => {
