@@ -40,10 +40,11 @@ export function Result({ code, status, template, cells, partnerHere, canRetake, 
   const [format, setFormat] = useState<'png' | 'jpg'>('png')
   const [confirming, setConfirming] = useState<number | null>(null)
   const [background, setBackground] = useState<BackgroundId>('none')
+  const [attempt, setAttempt] = useState(0) // bumped to retry the cutouts after a failure
   const meta = useMemo(() => ({ code, filter, dateLabel: formatStripDate(new Date()) }), [code, filter])
   const hasTogether = cells.some((c) => c.kind === 'both')
   const wantsCutout = background !== 'none' && hasTogether
-  const cut = useCutouts(cells, wantsCutout)
+  const cut = useCutouts(cells, wantsCutout, attempt)
   const scene = wantsCutout && cut.status === 'ready' ? background : null // `wantsCutout` already rules out 'none'
   const { url, canvas, error } = useStrip(cells, template, meta, scene, cut.byKey)
   const filename = `${APP_NAME.toLowerCase()}-${code}-${template}.${format}`
@@ -88,7 +89,13 @@ export function Result({ code, status, template, cells, partnerHere, canRetake, 
       <BrutalCard heavy className="flex flex-col gap-5 p-4">
         {hasTogether && (
           <div className="flex flex-col gap-2">
-            <BackgroundPicker value={background} onChange={setBackground} />
+            <BackgroundPicker
+              value={background}
+              onChange={(id) => {
+                setBackground(id)
+                if (cut.status === 'failed') setAttempt((n) => n + 1) // choosing again after a failure is a retry
+              }}
+            />
             {cut.status === 'loading' && (
               <p role="status" className="text-sm font-black uppercase">
                 CUTTING YOU OUT…

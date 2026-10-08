@@ -72,6 +72,14 @@ test("if the cutout tool can't load, the cell falls back to side by side and dow
   await expect(a.getByRole('button', { name: 'DOWNLOAD PHOTO' })).toBeEnabled()
   const [download] = await Promise.all([a.waitForEvent('download'), a.getByRole('button', { name: 'DOWNLOAD PHOTO' }).click()])
   expect(download.suggestedFilename()).toMatch(/\.png$/)
+
+  // Review I3: the network comes back, and choosing another background must try again (not sit on the old failure).
+  await a.unroute('**/vendor/**')
+  await a.getByRole('radio', { name: 'PINK' }).click()
+  await expect(a.getByText("COULDN'T CUT YOU OUT. SHOWING SIDE BY SIDE.")).toHaveCount(0, { timeout: 60_000 })
+  await expect.poll(() => strip(a).getAttribute('src'), { timeout: 60_000 }).not.toBe(before)
+  const [pink] = await pixels(a, [[60, 408]])
+  expect(pink).toEqual([255, 79, 163])
 })
 
 test('a strip with no TOGETHER cell does not offer a background', async ({ browser }) => {

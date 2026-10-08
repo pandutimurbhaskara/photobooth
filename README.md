@@ -185,7 +185,7 @@ Nothing was pushed or deployed.
 | Durable Object behaviour (workerd) | **verified here** | 72 worker tests: join/reclaim/full/leave, relay, ping, rate limit, expiry and capture-timeout alarms, hibernation, keepalive, ready/capture scheduling, ICE gating, the shared plan (stages, takes, retake, reset, ready-clearing) |
 | Durable Object **deployment** | **not done** | needs `wrangler login` + `wrangler deploy` (interactive, publishes outward) |
 | WebSocket connections | **verified here** | worker tests + every e2e spec |
-| Two browsers simultaneously | **verified here** | 42 Playwright tests (`npm run test:e2e`, 7.4 min), two or three isolated Chromium contexts each |
+| Two browsers simultaneously | **verified here** | 43 Playwright tests (`npm run test:e2e`, 8.5 min), two or three isolated Chromium contexts each |
 | Synchronized capture | **verified here** | e2e: capture spread < 150 ms on one machine, repeated 10× with 0 failures. Real-device accuracy: checklist row 1 |
 | Photo generation | **verified here** | strips 1056×1800 (2-cut) / 1056×1032 (Polaroid) / 2064×1800 (2 × 2) asserted in e2e; 4-cut 1056×3336 asserted at unit level; B&W filter verified by pixel sampling |
 | Download | **verified here** | PNG and JPG download events with the expected file names. File contents on real phones: row 8 |

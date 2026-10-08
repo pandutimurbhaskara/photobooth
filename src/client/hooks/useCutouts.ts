@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { cutoutKey, type Cutout } from '../lib/cutout'
+import { memoByBlob } from '../lib/memo-by-blob'
 import { cutOut, withTimeout } from '../lib/segment'
 import type { CellBlobs } from '../lib/takes'
 import { SEGMENT_TIMEOUT_MS } from '../lib/vendor'
@@ -15,26 +16,16 @@ const EMPTY: ReadonlyMap<string, Cutout> = new Map()
 const IDLE: State = { status: 'idle', byKey: EMPTY }
 const FAILED: State = { status: 'failed', byKey: EMPTY }
 
-// One cutout per round and person, kept for the life of the tab (a photo never changes once taken).
-// ponytail: never evicted; a long session with many retakes holds a few MB per retaken TOGETHER cell. Evict by round if it matters.
-const cache = new Map<string, Promise<Cutout>>()
-function cutoutFor(round: number, who: 'a' | 'b', photo: Blob): Promise<Cutout> {
-  const key = cutoutKey(round, who)
-  let hit = cache.get(key)
-  if (!hit) {
-    hit = withTimeout(cutOut(photo), SEGMENT_TIMEOUT_MS, 'cutting a person out')
-    cache.set(key, hit)
-    hit.catch(() => cache.delete(key)) // a failure is not remembered: choosing a background again retries
-  }
-  return hit
-}
+// One cutout per photo, kept for as long as the photo is (a WeakMap: a pruned photo takes its cutout with it). Keyed by the
+// photo itself, not by round number — rounds restart at 1 in every booth and would mix up two people's cutouts.
+const cutOutOnce = memoByBlob((photo: Blob) => withTimeout(cutOut(photo), SEGMENT_TIMEOUT_MS, 'cutting a person out'))
 
 /**
  * Cut both people out of every TOGETHER cell, one at a time. Any failure → `failed`, and the strip stays side by side.
- * Like `useStrip` it reads `cells` through a ref and keys by content, so a re-created array with the same photos does
+ * Bump `attempt` to try again after a failure. Like `useStrip` it reads `cells` through a ref and keys by content, so a re-created array with the same photos does
  * not redo the work.
  */
-export function useCutouts(cells: readonly CellBlobs[] | null, enabled: boolean): State {
+export function useCutouts(cells: readonly CellBlobs[] | null, enabled: boolean, attempt = 0): State {
   const [state, setState] = useState<State>(IDLE)
   const latest = useLatest(cells)
   const key = cells ? cells.map((c) => `${c.kind}:${c.round}`).join('|') : ''
@@ -52,7 +43,7 @@ export function useCutouts(cells: readonly CellBlobs[] | null, enabled: boolean)
         const byKey = new Map<string, Cutout>()
         for (const cell of current) {
           if (cell.kind !== 'both') continue
-          for (const who of ['a', 'b'] as const) byKey.set(cutoutKey(cell.round, who), await cutoutFor(cell.round, who, cell[who]))
+          for (const who of ['a', 'b'] as const) byKey.set(cutoutKey(cell.round, who), await cutOutOnce(cell[who]))
         }
         if (!cancelled) setState({ status: 'ready', byKey })
       } catch {
@@ -62,7 +53,7 @@ export function useCutouts(cells: readonly CellBlobs[] | null, enabled: boolean)
     return () => {
       cancelled = true
     }
-  }, [key, enabled, latest])
+  }, [key, enabled, attempt, latest])
 
   return state
 }

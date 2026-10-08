@@ -6,12 +6,15 @@ import {
   highestReferenced,
   mergePhoto,
   missingRounds,
+  needsCompleteResend,
   pruneStore,
   putRound,
   referencedRounds,
+  roundLostAfterCompleting,
   type Round,
   type TakeStore,
 } from './takes'
+import type { RoomState } from '../../shared/protocol'
 
 const blob = (s: string) => new Blob([s])
 const round = (n: number): Round => ({ round: n, a: blob(`a${n}`), b: blob(`b${n}`) })
@@ -131,5 +134,48 @@ describe('finishedOf', () => {
       ['both', 4],
     ])
     expect(finished.cells[0]?.a).toBeInstanceOf(Blob)
+  })
+})
+
+// Review I4: a photo-complete can be lost on its way to the server (the socket was reconnecting at that moment).
+const room = (over: Partial<RoomState> = {}): RoomState => ({
+  code: 'ABCDEF',
+  you: 'a',
+  phase: 'capture',
+  round: 3,
+  captureAt: null,
+  participants: {
+    a: { connected: true, ready: false, photoDone: false },
+    b: { connected: true, ready: false, photoDone: true },
+  },
+  plan: defaultPlan(),
+  ...over,
+})
+
+describe('needsCompleteResend', () => {
+  it('is true when this tab finished the round the server is still waiting on but has not counted it', () => {
+    expect(needsCompleteResend(room(), 3)).toBe(true)
+  })
+  it('is false once the server has counted it, when no round is in flight, or for a different round', () => {
+    const counted = room({ participants: { a: { connected: true, ready: false, photoDone: true }, b: null } })
+    expect(needsCompleteResend(counted, 3)).toBe(false)
+    expect(needsCompleteResend(room({ phase: 'ready' }), 3)).toBe(false)
+    expect(needsCompleteResend(room(), 2)).toBe(false) // this tab finished an older round
+    expect(needsCompleteResend(room(), -1)).toBe(false) // this tab has finished nothing
+  })
+})
+
+describe('roundLostAfterCompleting', () => {
+  it('is true when a round this tab finished ends without becoming a take', () => {
+    expect(roundLostAfterCompleting('capture', room({ phase: 'ready' }), 3)).toBe(true)
+  })
+  it('is false when the round was recorded as a take', () => {
+    const recorded = room({ phase: 'ready', plan: { ...defaultPlan(), takes: [[3]] } })
+    expect(roundLostAfterCompleting('capture', recorded, 3)).toBe(false)
+  })
+  it('is false when the phase did not just leave a capture (a retake or reset also clears takes) or the round is not ours', () => {
+    expect(roundLostAfterCompleting('ready', room({ phase: 'ready' }), 3)).toBe(false)
+    expect(roundLostAfterCompleting('capture', room({ phase: 'ready' }), 2)).toBe(false)
+    expect(roundLostAfterCompleting('capture', room({ phase: 'waiting' }), 3)).toBe(false)
   })
 })

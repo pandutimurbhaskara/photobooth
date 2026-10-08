@@ -1,4 +1,4 @@
-import type { SlotName } from '../../shared/protocol'
+import type { Phase, RoomState, SlotName } from '../../shared/protocol'
 import type { CellKind, Plan, TemplateId } from '../../shared/plan'
 
 /** One completed capture by both people. `a` is slot a's photo, `b` is slot b's, for everyone. */
@@ -87,4 +87,20 @@ export function finishedOf(plan: Plan, store: TakeStore): Finished | null {
     cells.push({ kind, round: round.round, a: round.a, b: round.b })
   }
   return cells.length > 0 ? { template: plan.template, cells } : null
+}
+
+/**
+ * Did this tab finish the round the server is still waiting on, without the server having counted it? Then its
+ * `photo-complete` was lost on the way (the socket was reconnecting) and must be sent again — the server is idempotent.
+ */
+export function needsCompleteResend(state: RoomState, completedRound: number): boolean {
+  return state.phase === 'capture' && state.round === completedRound && state.participants[state.you]?.photoDone === false
+}
+
+/**
+ * A round this tab had finished ended without becoming a take (the server gave up on it). Only meaningful on the
+ * transition out of a capture: a retake or reset also clears takes, but does not leave a capture.
+ */
+export function roundLostAfterCompleting(previous: Phase, state: RoomState, completedRound: number): boolean {
+  return previous === 'capture' && state.phase === 'ready' && state.round === completedRound && !state.plan.takes.some((t) => t.includes(state.round))
 }

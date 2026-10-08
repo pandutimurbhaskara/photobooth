@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router'
 import { SYNC_BURST_READY } from '../../shared/constants'
 import { defaultPlan, type PlanAction } from '../../shared/plan'
-import { otherSlot, type ServerMessage, type SlotName } from '../../shared/protocol'
+import { otherSlot, type Phase, type ServerMessage, type SlotName } from '../../shared/protocol'
 import { normalizeRoomInput } from '../../shared/room-code'
 import type { ConnKind } from '../components/ConnectionStatus'
 import { useCamera } from '../hooks/useCamera'
@@ -16,7 +16,20 @@ import { browserCaptureDeps, createCaptureScheduler } from '../lib/capture'
 import { recordCapture } from '../lib/dev-hook'
 import { captureFrame, FrameNotReadyError } from '../lib/photo'
 import { parseControl, PhotoReceiver, sendPhoto } from '../lib/photo-transfer'
-import { completeRound, finishedOf, highestReferenced, mergePhoto, missingRounds, pruneStore, putRound, type Finished, type Pending, type TakeStore } from '../lib/takes'
+import {
+  completeRound,
+  finishedOf,
+  highestReferenced,
+  mergePhoto,
+  missingRounds,
+  needsCompleteResend,
+  pruneStore,
+  putRound,
+  roundLostAfterCompleting,
+  type Finished,
+  type Pending,
+  type TakeStore,
+} from '../lib/takes'
 import { getParticipantId } from '../lib/session'
 import { CameraGate } from '../screens/CameraGate'
 import { Lobby } from '../screens/Lobby'
@@ -82,6 +95,8 @@ function BoothInner({ code }: { code: string }) {
         if (isSnapshot && m.state.you === 'a' && m.state.participants.b?.connected) rtc.buildAndOffer()
         // A reload or reconnect mid-round: the room-state carries the round, and the scheduler dedupes repeats.
         if (m.state.phase === 'capture' && m.state.captureAt !== null) beginRound.current(m.state.round, m.state.captureAt)
+        // Our photo-complete may have been lost while the socket was reconnecting; the server is idempotent, so say it again.
+        if (needsCompleteResend(m.state, completed.current)) room.send({ type: 'photo-complete', round: m.state.round })
         return
       case 'partner-joined':
         if (slot.current === 'a') rtc.buildAndOffer()
@@ -128,9 +143,19 @@ function BoothInner({ code }: { code: string }) {
   // even if the partner starts over or retakes while you are still looking at it (spec §5).
   const live = useMemo(() => finishedOf(plan, store), [plan, store])
   const [snapshot, setSnapshot] = useState<Finished | null>(null)
+  const hasSnapshot = snapshot !== null
   useEffect(() => {
     if (live) setSnapshot(live)
   }, [live])
+  // Our own retake clears the snapshot only once the server has actually moved on to it. If the partner got there first
+  // (a reset, say) the retake is refused and the strip must stay on screen.
+  const pendingRetake = useRef<{ cell: number; v: number } | null>(null)
+  useEffect(() => {
+    const mine = pendingRetake.current
+    if (!mine || plan.v <= mine.v) return
+    pendingRetake.current = null
+    if (plan.stage === 'shoot' && plan.cell === mine.cell) setSnapshot(null)
+  }, [plan])
 
   // A photo from either side lands here; when both halves of a round exist it is stored and reported.
   const addPhoto = useLatest((round: number, who: 'own' | 'partner', blob: Blob) => {
@@ -214,11 +239,11 @@ function BoothInner({ code }: { code: string }) {
 
   // Photos live only in this tab, so warn before a reload or close throws them away.
   useEffect(() => {
-    if (store.size === 0) return
+    if (store.size === 0 && !hasSnapshot) return
     const warn = (e: BeforeUnloadEvent) => e.preventDefault()
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
-  }, [store.size])
+  }, [store.size, hasSnapshot])
 
   const phase = room.state?.phase
   useEffect(() => {
@@ -229,6 +254,17 @@ function BoothInner({ code }: { code: string }) {
     }
   }, [phase])
 
+  // A round this tab had finished can still end without becoming a take (the server gave up on it, e.g. because the
+  // partner's socket dropped). The waiting message would just vanish; say so instead.
+  const previousPhase = useRef<Phase | undefined>(undefined)
+  useEffect(() => {
+    const state = room.state
+    if (!state) return
+    const was = previousPhase.current
+    previousPhase.current = state.phase
+    if (was && roundLostAfterCompleting(was, state, completed.current)) setRoundFailed(true)
+  }, [room.state])
+
   if (gate === 'checking') return <Splash text="CHECKING BOOTH…" />
   if (gate === 'not-found') return <Problem kind="not-found" />
   if (gate === 'full') return <Problem kind="room-full" />
@@ -237,7 +273,7 @@ function BoothInner({ code }: { code: string }) {
   const mySlot = room.state?.you
   const partner = room.state && mySlot ? room.state.participants[otherSlot(mySlot)] : null
   const me = room.state && mySlot ? room.state.participants[mySlot] : null
-  const hasPhotos = store.size > 0
+  const hasPhotos = store.size > 0 || hasSnapshot
   const status: ConnKind =
     room.status === 'reconnecting'
       ? 'reconnecting'
@@ -270,9 +306,9 @@ function BoothInner({ code }: { code: string }) {
         template={shown.template}
         cells={shown.cells}
         partnerHere={Boolean(partner?.connected)}
-        canRetake={room.status === 'open' && Boolean(partner?.connected) && room.state?.phase === 'ready'}
+        canRetake={room.status === 'open' && Boolean(partner?.connected) && room.state?.phase === 'ready' && live !== null}
         onRetake={(cell) => {
-          setSnapshot(null)
+          pendingRetake.current = { cell, v: plan.v }
           sendPlan({ k: 'retake', cell })
         }}
         notice={

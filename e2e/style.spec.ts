@@ -41,6 +41,16 @@ test('a reloaded tab says its photos are gone, and starting over does not take t
   await b.getByRole('button', { name: 'START OVER' }).click()
 
   await expect(a.getByText('THEY STARTED OVER. SAVE YOUR STRIP.')).toBeVisible()
+  // Review I1: what A sees is now only a snapshot. RETAKE on it would be refused by the server *and* throw the
+  // snapshot away, and A's store is empty, so closing the tab must still warn that the strip would be lost.
+  await expect(a.getByRole('button', { name: 'RETAKE 1' })).toBeDisabled()
+  expect(
+    await a.evaluate(() => {
+      const event = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(event)
+      return event.defaultPrevented
+    }),
+  ).toBe(true)
   const [download] = await Promise.all([a.waitForEvent('download'), a.getByRole('button', { name: 'DOWNLOAD PHOTO' }).click()])
   expect(download.suggestedFilename()).toMatch(/\.png$/)
   await a.getByRole('button', { name: 'NEW STRIP' }).click()

@@ -99,3 +99,40 @@ test('the finished strip stays reachable when the partner connection dies withou
   const [download] = await Promise.all([a.waitForEvent('download'), a.getByRole('button', { name: 'DOWNLOAD PHOTO' }).click()])
   expect(download.suggestedFilename()).toMatch(/\.png$/)
 })
+
+// Review I4: a photo-complete lost on its way to the server must not strand a person silently. Depending on message
+// order the take is either recovered (the tab re-sends when the server says it has not counted it) or, when the round
+// really is lost, the person is told. What must never happen is the waiting message just disappearing.
+test('a photo-complete that never reaches the server is recovered or explained, never silent', async ({ browser }) => {
+  test.setTimeout(150_000)
+  const a = await newPlayer(browser)
+  const b = await newPlayer(browser)
+  let dropped = false
+  await a.routeWebSocket(/\/api\/rooms\/[^/]+\/ws/, (ws) => {
+    const server = ws.connectToServer()
+    ws.onMessage((m) => {
+      if (!dropped && typeof m === 'string' && m.includes('"photo-complete"')) {
+        dropped = true // swallowed, as if the socket were reconnecting at that moment
+        return
+      }
+      server.send(m)
+    })
+    ws.onClose((code, reason) => void server.close({ code, reason }))
+    server.onMessage((m) => ws.send(m))
+    server.onClose((code, reason) => void ws.close({ code, reason }))
+  })
+
+  const url = await createBooth(a)
+  await enterBooth(a)
+  await b.goto(url)
+  await enterBooth(b)
+  await expectRemoteVideo(a)
+  await expectRemoteVideo(b)
+
+  await chooseTemplate(a, 'duo2')
+  await pressReady(a)
+  await pressReady(b)
+
+  await expect(a.getByText(/CELL 1 OF 2 · TAKE 2|THAT ROUND DIDN'T WORK/)).toBeVisible({ timeout: 60_000 })
+  expect(dropped).toBe(true)
+})
