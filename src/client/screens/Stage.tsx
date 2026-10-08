@@ -25,6 +25,7 @@ interface Props {
   now: () => number
   onCountdownDone: () => void
   missed: boolean
+  roundFailed: boolean
   exchanging: boolean
   captured: boolean
   canFlip: boolean
@@ -52,6 +53,12 @@ export function Stage(p: Props) {
       {p.missed && (
         <BrutalCard tone="orange" role="alert" className="p-3 text-lg font-black uppercase">
           MISSED IT. TRY AGAIN IN A MOMENT.
+        </BrutalCard>
+      )}
+
+      {p.roundFailed && !p.exchanging && (
+        <BrutalCard tone="orange" role="status" className="p-3 text-lg font-black uppercase">
+          THAT ROUND DIDN'T WORK. GO AGAIN.
         </BrutalCard>
       )}
 

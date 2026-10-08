@@ -62,7 +62,8 @@ function BoothInner({ code }: { code: string }) {
   const [rounds, setRounds] = useState<Round[]>([])
   const [partnerMirrored, setPartnerMirrored] = useState(true) // until the partner's `cam` message says otherwise
   const [captured, setCaptured] = useState(false)
-  const [exchangeFailed, setExchangeFailed] = useState(false)
+  const [exchangeFailed, setExchangeFailed] = useState(false) // the data channel itself failed to deliver our photo
+  const [roundFailed, setRoundFailed] = useState(false) // the round ended without both photos (a missed shot, a slow partner)
   const pending = useRef<Pending | null>(null)
   const completed = useRef(-1) // highest round already finished: later duplicates are ignored
   const currentRound = useRef(0) // the round the server most recently announced
@@ -160,14 +161,18 @@ function BoothInner({ code }: { code: string }) {
     })()
   })
   const beginRound = useLatest((round: number, captureAt: number) => {
-    setMissed(false)
-    const accepted = scheduler.schedule(round, captureAt, (r, at) => onCapture.current(r, at), () => setMissed(true))
-    if (!accepted) return
+    // The server repeats the current round in every room-state while it is in flight. A repeat must change
+    // nothing — in particular it must not clear a MISSED IT that the first delivery just raised.
+    if (round <= currentRound.current) return
     currentRound.current = round
     pending.current = null
+    setMissed(false)
     setCaptured(false)
     setExchangeFailed(false)
-    setCountdown({ round, captureAt })
+    setRoundFailed(false)
+    // May report "missed" synchronously when the message itself arrived far too late.
+    const accepted = scheduler.schedule(round, captureAt, (r, at) => onCapture.current(r, at), () => setMissed(true))
+    if (accepted) setCountdown({ round, captureAt })
   })
   const finishCountdown = useCallback(() => setCountdown(null), [])
 
@@ -194,9 +199,10 @@ function BoothInner({ code }: { code: string }) {
 
   const phase = room.state?.phase
   useEffect(() => {
-    // The server gave up on the round (exchange timeout) while this side still lacked a photo.
+    // The server gave up on the round (exchange timeout) while this side was still waiting for a photo. Say so
+    // plainly and let both people go again — this is not necessarily a network failure.
     if (phase === 'ready' && pending.current !== null && pending.current.round === currentRound.current) {
-      setExchangeFailed(true)
+      setRoundFailed(true)
     }
   }, [phase])
 
@@ -205,17 +211,9 @@ function BoothInner({ code }: { code: string }) {
   if (gate === 'full') return <Problem kind="room-full" />
   if (gate === 'error') return <Problem kind="gate-error" onRetry={() => location.reload()} />
 
-  if (camera.error) return <Problem kind={cameraProblem[camera.error]} onRetry={() => void camera.start()} />
-  if (!camera.stream) return <CameraGate onStart={() => void camera.start()} />
-
-  if (room.status === 'closed') return <Problem kind={closedProblem(room.closeCode)} onRetry={room.reconnect} />
-  if (!room.state) return <Splash text="CONNECTING…" />
-
-  const mySlot = room.state.you
-  const partner = room.state.participants[otherSlot(mySlot)]
-  const me = room.state.participants[mySlot]
-  const latest = rounds[rounds.length - 1]
-  const hasResult = latest !== undefined && room.state.phase !== 'capture'
+  const mySlot = room.state?.you
+  const partner = room.state && mySlot ? room.state.participants[otherSlot(mySlot)] : null
+  const me = room.state && mySlot ? room.state.participants[mySlot] : null
   const hasPhotos = rounds.length > 0
   const status: ConnKind =
     room.status === 'reconnecting'
@@ -224,17 +222,46 @@ function BoothInner({ code }: { code: string }) {
         ? 'lost'
         : !partner?.connected
           ? 'waiting'
-          : rtc.peerState === 'connected'
-            ? 'connected'
-            : rtc.peerState === 'reconnecting'
-              ? 'reconnecting'
-              : 'connecting'
+          : rtc.peerState === 'failed'
+            ? 'lost'
+            : rtc.peerState === 'connected'
+              ? 'connected'
+              : rtc.peerState === 'reconnecting'
+                ? 'reconnecting'
+                : 'connecting'
   const onReady = (ready: boolean) => {
     if (ready) sync.burst(SYNC_BURST_READY) // refresh the offset right before a round
     room.send({ type: ready ? 'ready' : 'unready' })
   }
 
-  if (!partner?.connected && !hasResult) {
+  // A finished strip is the one thing that cannot be recreated and lives only in this tab. Never hide it behind a
+  // failure screen (camera lost, socket closed, call dropped, partner gone): only a round in flight takes the screen back.
+  const latest = rounds[rounds.length - 1]
+  const roundInFlight = room.status === 'open' && room.state?.phase === 'capture'
+  if (latest && !roundInFlight) {
+    return (
+      <Result
+        rounds={rounds}
+        code={code}
+        status={status}
+        me={me}
+        partner={partner}
+        partnerHere={Boolean(partner?.connected)}
+        canRetake={
+          room.status === 'open' && Boolean(partner?.connected) && room.state?.phase === 'ready' && sync.synced && rtc.channelOpen
+        }
+        onReady={onReady}
+      />
+    )
+  }
+
+  if (camera.error) return <Problem kind={cameraProblem[camera.error]} onRetry={() => void camera.start()} />
+  if (!camera.stream) return <CameraGate onStart={() => void camera.start()} />
+
+  if (room.status === 'closed') return <Problem kind={closedProblem(room.closeCode)} onRetry={room.reconnect} />
+  if (!room.state) return <Splash text="CONNECTING…" />
+
+  if (!partner?.connected) {
     return (
       <Lobby
         code={code}
@@ -260,20 +287,6 @@ function BoothInner({ code }: { code: string }) {
       />
     )
   }
-  if (hasResult) {
-    return (
-      <Result
-        rounds={rounds}
-        code={code}
-        status={status}
-        me={me}
-        partner={partner}
-        partnerHere={Boolean(partner?.connected)}
-        canRetake={Boolean(partner?.connected) && room.state.phase === 'ready' && sync.synced && rtc.channelOpen}
-        onReady={onReady}
-      />
-    )
-  }
   return (
     <Stage
       code={code}
@@ -294,6 +307,7 @@ function BoothInner({ code }: { code: string }) {
       now={sync.now}
       onCountdownDone={finishCountdown}
       missed={missed}
+      roundFailed={roundFailed}
       exchanging={room.state.phase === 'capture' && countdown === null}
       captured={captured}
     />
