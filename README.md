@@ -76,6 +76,16 @@ Because every credential costs relay bandwidth, `/api/ice` only answers same-sit
 (by their participant id), at most 30 per room per hour, on top of the per-IP limit. A leaked room code cannot drain
 your allowance, but set a billing alert on your Cloudflare account anyway.
 
+## Format, takes and cutouts
+
+A session is: **FORMAT** (4-cut, 2 × 2, 2-cut or Polaroid; for each cell USER 1, USER 2 or TOGETHER — either person can choose) → **SHOOT** (2–3 synchronized takes per cell) → **PICK** (both keep one take) → **STYLE** (the finished strip: background, filter, file type, download, share, and retake of any single cell).
+
+A TOGETHER cell can put both people on one background. Each person is cut out of their own photo **in the browser** by the MediaPipe selfie segmenter. The runtime (~26 MB of WASM, two variants) and the model (250 KB, Apache-2.0) are self-hosted under `/vendor/` — `npm install` copies the runtime out of `node_modules` (`scripts/vendor-mediapipe.mjs`), the model is committed — and load only when someone first picks a background. The default, "side by side", never downloads them. The CSP gains exactly `'wasm-unsafe-eval'`. If the tool cannot load or run (or finds nobody in a photo), the cell stays side by side with a notice and download keeps working.
+
+Background, filter and file type are per person: your two downloads can differ. The first deploy uploads the vendored files as static assets (25 MiB per file is the limit; the WASM is 13 MB); if you deploy through Workers Builds, leave `postinstall` scripts enabled.
+
+Known limits of the cutout: it follows a 256-px mask, so thin or ambiguous things (a held object, hands, glasses) can look blocky or half-kept; and if the camera frame crops the top of someone's head, the cutout has a flat top because people are placed on the bottom edge of the cell.
+
 ## How synchronization works
 
 The server owns time. When both people are ready, `BoothRoom` picks one timestamp (`captureAt`, 4.5 s ahead) and
@@ -155,6 +165,11 @@ Full design: [`docs/superpowers/specs/2026-10-07-photobooth-design.md`](docs/sup
 | 10 | Strict network (corporate Wi-Fi / symmetric NAT) with and without TURN configured | fails clearly without TURN; works with TURN |
 | 11 | Reduced motion on in OS settings | no pop/wiggle animation; countdown numerals still change |
 | 12 | After `wrangler deploy`: `curl -sI https://<worker>/` | CSP, Permissions-Policy, nosniff, no-referrer present |
+| 13 | Take a real selfie pair (indoor light, hair, glasses) on iPhone Safari and Android Chrome, choose a background | the **person** is kept and the background replaced on both phones' strips; the edge is acceptable (one real portrait is verified in e2e; other people, lighting and phones are not) |
+| 14 | Pick a first background on mobile data | "CUTTING YOU OUT…" appears and finishes in roughly 10 s on 4G; if it fails, the notice shows and a retry works |
+| 15 | 4-cut with four TOGETHER cells on a mid-range phone | the page stays usable; note the total time and whether the tab freezes (cutouts run on the main thread) |
+| 16 | After `wrangler deploy`: choose a background, check the console and `curl -sI https://<worker>/vendor/models/selfie_segmenter.tflite` | no CSP violation; `cache-control: public, max-age=31536000, immutable`; the WASM compiles under the deployed CSP |
+| 17 | The two people pick different backgrounds | each person's strip matches their own screen |
 
 ## Verification status
 
@@ -170,11 +185,13 @@ Nothing was pushed or deployed.
 | Durable Object behaviour (workerd) | **verified here** | 72 worker tests: join/reclaim/full/leave, relay, ping, rate limit, expiry and capture-timeout alarms, hibernation, keepalive, ready/capture scheduling, ICE gating, the shared plan (stages, takes, retake, reset, ready-clearing) |
 | Durable Object **deployment** | **not done** | needs `wrangler login` + `wrangler deploy` (interactive, publishes outward) |
 | WebSocket connections | **verified here** | worker tests + every e2e spec |
-| Two browsers simultaneously | **verified here** | 38 Playwright tests (`npm run test:e2e`, 6.6 min), two or three isolated Chromium contexts each |
+| Two browsers simultaneously | **verified here** | 42 Playwright tests (`npm run test:e2e`, 7.4 min), two or three isolated Chromium contexts each |
 | Synchronized capture | **verified here** | e2e: capture spread < 150 ms on one machine, repeated 10× with 0 failures. Real-device accuracy: checklist row 1 |
 | Photo generation | **verified here** | strips 1056×1800 (2-cut) / 1056×1032 (Polaroid) / 2064×1800 (2 × 2) asserted in e2e; 4-cut 1056×3336 asserted at unit level; B&W filter verified by pixel sampling |
 | Download | **verified here** | PNG and JPG download events with the expected file names. File contents on real phones: row 8 |
 | Format, takes, pick, retake | **verified here** | e2e: format cards and per-cell kinds sync to both screens; READY clears when the plan changes; 2–3 takes; either person changes the kept take; retake one cell; a reload loses photos → START OVER; the partner's strip survives |
+| Cutout pipeline | **verified here** | e2e on a real (public-domain) portrait: the self-hosted WASM + model keep the person and make the backdrop transparent; a chosen background puts both people on it (the cell's edge is exactly the background colour, people are present along the bottom) and the strip downloads; blocking `/vendor/*` falls back to side by side with a notice and download still works. **Other people, lighting and phones are not verified here** — rows 13–15 |
+| CSP with WASM | **verified here (unit)** | `public/_headers` allows `'wasm-unsafe-eval'` and never `'unsafe-eval'`; the dev server does not serve `_headers`, so deployed behaviour is row 16 |
 | Camera permissions | **verified here (simulated)** | blocked / no camera / no camera API screens via a stubbed `getUserMedia`. Real browser permission prompts: row 2 |
 | Disconnect / reconnect | **verified here** | partner leaves mid-countdown, reload rejoins a full booth, second tab replaces the first, a partner whose call dies while their socket stays open (the strip stays downloadable), a capture message delivered 7 s late (MISSED IT, then the round recovers for both), socket backoff and keepalive unit-tested. Real network switch / locked phone: rows 4, 5 |
 | Mobile layout | **verified here (emulated)** | 390×844 Chromium: no sideways scroll, READY ≥ 48 px and on screen. Real phones: rows 1, 8 |
