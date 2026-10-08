@@ -7,4 +7,6 @@ export default defineConfig({
   plugins: [react(), tailwindcss(), cloudflare()],
   // Lets `cloudflared tunnel --url http://localhost:5173` reach the dev server (phones need HTTPS).
   server: { allowedHosts: ['.trycloudflare.com'] },
+  // The segmenter is imported lazily; pre-bundling it up front stops Vite re-optimising (and reloading the page) the first time it loads.
+  optimizeDeps: { include: ['@mediapipe/tasks-vision'] },
 })
