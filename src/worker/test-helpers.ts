@@ -44,9 +44,23 @@ export class TestClient {
     await sleep(ms)
     this.messages.length = 0
   }
-  /** Let in-flight messages land, then return the newest room-state and drop the queue. */
-  async lastState(ms = 80): Promise<RoomState> {
-    await sleep(ms)
+  /**
+   * Wait for a room-state to arrive, then for the message stream to go quiet, and return the newest room-state
+   * (dropping the queue). Waiting for quiet — not a fixed sleep — keeps this reliable when the machine is busy.
+   */
+  async lastState(quietMs = 80, maxMs = 3000): Promise<RoomState> {
+    const end = Date.now() + maxMs
+    let seen = -1
+    let quietSince = Date.now()
+    for (;;) {
+      if (this.messages.length !== seen) {
+        seen = this.messages.length
+        quietSince = Date.now()
+      }
+      if (this.messages.some((m) => m.type === 'room-state') && Date.now() - quietSince >= quietMs) break
+      if (Date.now() > end) throw new Error(`no room-state arrived; queue=${JSON.stringify(this.messages)}`)
+      await sleep(10)
+    }
     const states = this.messages.filter((m): m is Extract<ServerMessage, { type: 'room-state' }> => m.type === 'room-state')
     this.messages.length = 0
     const last = states[states.length - 1]
