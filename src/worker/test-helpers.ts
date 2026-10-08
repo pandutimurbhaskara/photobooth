@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers'
 import { generateRoomCode } from '../shared/room-code'
-import type { ClientMessage, ServerMessage } from '../shared/protocol'
+import type { Plan } from '../shared/plan'
+import type { ClientMessage, RoomState, ServerMessage } from '../shared/protocol'
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 const open: TestClient[] = []
@@ -42,6 +43,15 @@ export class TestClient {
   async settle(ms = 60): Promise<void> {
     await sleep(ms)
     this.messages.length = 0
+  }
+  /** Let in-flight messages land, then return the newest room-state and drop the queue. */
+  async lastState(ms = 80): Promise<RoomState> {
+    await sleep(ms)
+    const states = this.messages.filter((m): m is Extract<ServerMessage, { type: 'room-state' }> => m.type === 'room-state')
+    this.messages.length = 0
+    const last = states[states.length - 1]
+    if (!last) throw new Error('no room-state arrived')
+    return last.state
   }
 
   private async until<T>(probe: () => T | undefined, what: string, ms: number): Promise<T> {
@@ -117,6 +127,7 @@ export interface Peek {
     captureAt: number | null
     round: number
     slots: Record<string, { participantId: string; ready: boolean; photoDone: boolean; lastSeenAt: number } | undefined>
+    plan?: Plan
   }
 }
 export const peek = (instance: unknown): Peek => instance as Peek

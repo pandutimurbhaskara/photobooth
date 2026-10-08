@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { defaultPlan } from '../../shared/plan'
 import type { ServerMessage } from '../../shared/protocol'
 import { RoomSocket, type SocketStatus } from './room-socket'
 
@@ -45,7 +46,7 @@ class FakeWebSocket {
 
 const STATE: ServerMessage = {
   type: 'room-state',
-  state: { code: 'ABCDEF', you: 'a', phase: 'waiting', round: 0, captureAt: null, participants: { a: null, b: null } },
+  state: { code: 'ABCDEF', you: 'a', phase: 'waiting', round: 0, captureAt: null, participants: { a: null, b: null }, plan: defaultPlan() },
 }
 
 function make(extra: Partial<ConstructorParameters<typeof RoomSocket>[0]> = {}) {

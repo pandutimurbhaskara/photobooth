@@ -14,6 +14,8 @@ import {
 } from '../shared/constants'
 import { decodeClientFrame, otherSlot } from '../shared/protocol'
 import type { ClientMessage, ErrorCode, Phase, PState, RoomState, ServerMessage, SlotName } from '../shared/protocol'
+import { acceptsReady, applyPlanAction, defaultPlan, onBothReady, recordTake } from '../shared/plan'
+import type { Plan } from '../shared/plan'
 
 const WS_OPEN = 1
 const SLOTS: readonly SlotName[] = ['a', 'b']
@@ -33,6 +35,8 @@ interface RoomRecord {
   slots: Partial<Record<SlotName, Slot>>
   /** TURN credentials minted for this room in the current window. */
   ice?: { since: number; count: number }
+  /** The shared booth plan. Optional only because rooms persisted before it existed have none; the `plan` getter fills it in. */
+  plan?: Plan
 }
 interface Attachment {
   slot: SlotName
@@ -64,7 +68,7 @@ export class BoothRoom extends DurableObject<Env> {
   async create(code: string): Promise<boolean> {
     if (this.rec) return false
     const now = Date.now()
-    this.rec = { code, createdAt: now, lastActivityAt: now, round: 0, captureAt: null, slots: {} }
+    this.rec = { code, createdAt: now, lastActivityAt: now, round: 0, captureAt: null, slots: {}, plan: defaultPlan() }
     this.save()
     await this.ctx.storage.setAlarm(now + ROOM_IDLE_MS)
     return true
@@ -228,17 +232,38 @@ export class BoothRoom extends DurableObject<Env> {
       case 'ice-candidate':
         this.sendTo(otherSlot(slot), msg) // already validated and rebuilt by parseClientMessage
         return
+      case 'plan': {
+        // Plan changes only happen between rounds. `reset` is also allowed to someone alone, so a person whose
+        // photos are gone (a reload) can always leave a dead session.
+        const phase = this.phase(now)
+        const allowed = msg.action.k === 'reset' ? phase !== 'capture' : phase === 'ready'
+        const next = allowed ? applyPlanAction(this.plan, msg.action) : null
+        if (next) {
+          rec.plan = next
+          this.clearReady() // nobody stays committed to a plan they have not seen
+          this.save()
+        }
+        this.broadcastState() // a refusal re-syncs the caller; an accepted change tells both
+        return
+      }
       case 'ready':
       case 'unready': {
         const me = rec.slots[slot]
-        // Only while two people are present and no round is in flight. Re-sync the caller either way
-        // (computing the phase may also drop an expired capture).
-        if (!me || this.phase(now) !== 'ready') {
+        // Only while two people are present, no round is in flight and the plan has something to be ready for.
+        // Re-sync the caller either way (computing the phase may also drop an expired capture).
+        if (!me || this.phase(now) !== 'ready' || !acceptsReady(this.plan)) {
           this.broadcastState()
           return
         }
         me.ready = msg.type === 'ready'
-        if (rec.slots.a?.ready && rec.slots.b?.ready) this.schedule(now)
+        if (rec.slots.a?.ready && rec.slots.b?.ready) {
+          const next = onBothReady(this.plan)
+          if (next) {
+            rec.plan = next.plan
+            if (next.schedule) this.schedule(now)
+            else this.clearReady()
+          }
+        }
         this.save()
         this.broadcastState()
         return
@@ -247,11 +272,21 @@ export class BoothRoom extends DurableObject<Env> {
         const me = rec.slots[slot]
         if (!me || rec.captureAt === null || msg.round !== rec.round) return
         me.photoDone = true
-        if (rec.slots.a?.photoDone && rec.slots.b?.photoDone) rec.captureAt = null
+        if (rec.slots.a?.photoDone && rec.slots.b?.photoDone) {
+          rec.captureAt = null
+          rec.plan = recordTake(this.plan, rec.round) // a take exists only once both people hold both photos
+        }
         this.save()
         this.broadcastState()
         return
       }
+    }
+  }
+
+  private clearReady(): void {
+    for (const name of SLOTS) {
+      const s = this.rec?.slots[name]
+      if (s) s.ready = false
     }
   }
 
@@ -298,6 +333,13 @@ export class BoothRoom extends DurableObject<Env> {
   private get room(): RoomRecord {
     if (!this.rec) throw new Error('room was never created')
     return this.rec
+  }
+
+  /** Rooms persisted before plans existed get a fresh one the first time it is read. */
+  private get plan(): Plan {
+    const rec = this.room
+    rec.plan ??= defaultPlan()
+    return rec.plan
   }
 
   private save(): void {
@@ -360,7 +402,7 @@ export class BoothRoom extends DurableObject<Env> {
       const s = rec.slots[name]
       return s ? { connected: connected.has(name), ready: s.ready, photoDone: s.photoDone } : null
     }
-    return { code: rec.code, you: slot, phase, round: rec.round, captureAt: rec.captureAt, participants: { a: p('a'), b: p('b') } }
+    return { code: rec.code, you: slot, phase, round: rec.round, captureAt: rec.captureAt, participants: { a: p('a'), b: p('b') }, plan: this.plan }
   }
 
   // ---- Sending ----------------------------------------------------------------------------

@@ -2,7 +2,8 @@ import { env } from 'cloudflare:workers'
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CAPTURE_LEAD_MS, EXCHANGE_TIMEOUT_MS, MAX_WS_FRAME_BYTES, ROOM_IDLE_MS, SLOT_GRACE_MS } from '../shared/constants'
-import { closeAll, joinAs, newRoom, openSocket, peek, pid } from './test-helpers'
+import { defaultPlan, type Plan, type PlanAction, type TemplateId } from '../shared/plan'
+import { closeAll, joinAs, newRoom, openSocket, peek, pid, type TestClient } from './test-helpers'
 
 afterEach(closeAll)
 
@@ -309,9 +310,17 @@ async function pair() {
   return { code, stub, a, b }
 }
 
+/** The plan needs a template before READY means anything. */
+async function choosePair(template: TemplateId = 'duo2') {
+  const ctx = await pair()
+  ctx.a.send({ type: 'plan', action: { k: 'template', template } })
+  await Promise.all([ctx.a.settle(), ctx.b.settle()])
+  return ctx
+}
+
 describe('ready → scheduled capture', () => {
   it('schedules one capture, identical for both, once both are ready', async () => {
-    const { a, b } = await pair()
+    const { a, b } = await choosePair()
     const before = Date.now()
     a.send({ type: 'ready' })
     const first = await a.take('room-state')
@@ -334,7 +343,7 @@ describe('ready → scheduled capture', () => {
 
   // Review Focus 1: both people press READY in the same instant.
   it('schedules exactly one round when both press ready at the same instant', async () => {
-    const { a, b } = await pair()
+    const { a, b } = await choosePair()
     a.send({ type: 'ready' })
     b.send({ type: 'ready' })
     expect((await a.take('capture-scheduled')).round).toBe(1)
@@ -352,6 +361,8 @@ describe('ready → scheduled capture', () => {
     const b = await joinAs(code, 2)
     await solo.take('partner-joined')
     await solo.settle()
+    solo.send({ type: 'plan', action: { k: 'template', template: 'duo2' } })
+    await solo.settle()
     solo.send({ type: 'ready' })
     expect((await solo.take('room-state')).state.participants.a?.ready).toBe(true)
     solo.send({ type: 'unready' })
@@ -360,7 +371,7 @@ describe('ready → scheduled capture', () => {
   })
 
   it('ignores ready/unready while a round is in flight', async () => {
-    const { a, b } = await pair()
+    const { a, b } = await choosePair()
     a.send({ type: 'ready' })
     b.send({ type: 'ready' })
     await a.take('capture-scheduled')
@@ -376,7 +387,7 @@ describe('ready → scheduled capture', () => {
 
 describe('round lifecycle', () => {
   async function startRound() {
-    const ctx = await pair()
+    const ctx = await choosePair()
     ctx.a.send({ type: 'ready' })
     ctx.b.send({ type: 'ready' })
     await ctx.a.take('capture-scheduled')
@@ -453,5 +464,252 @@ describe('round lifecycle', () => {
     const state = await a.take('room-state')
     expect(state.state).toMatchObject({ phase: 'ready', captureAt: null })
     expect(state.state.participants.a?.ready).toBe(true) // the ready press was accepted
+  })
+})
+
+describe('plan', () => {
+  const act = (action: PlanAction) => ({ type: 'plan', action }) as const
+
+  async function choose(a: TestClient, b: TestClient, template: TemplateId = 'duo2'): Promise<Plan> {
+    a.send(act({ k: 'template', template }))
+    const [state] = await Promise.all([a.lastState(), b.lastState()])
+    return state.plan
+  }
+  /** Both press ready; resolves with the round the server scheduled. */
+  async function nextRound(a: TestClient, b: TestClient): Promise<number> {
+    a.send({ type: 'ready' })
+    b.send({ type: 'ready' })
+    const scheduled = await a.take('capture-scheduled')
+    await b.take('capture-scheduled')
+    await Promise.all([a.settle(), b.settle()])
+    return scheduled.round
+  }
+  async function completeRound(a: TestClient, b: TestClient, round: number): Promise<Plan> {
+    a.send({ type: 'photo-complete', round })
+    b.send({ type: 'photo-complete', round })
+    const [state] = await Promise.all([a.lastState(), b.lastState()])
+    return state.plan
+  }
+  const shootTake = async (a: TestClient, b: TestClient): Promise<Plan> => completeRound(a, b, await nextRound(a, b))
+  /** Both press ready in the pick stage (they agree on the kept take). */
+  async function bothReady(a: TestClient, b: TestClient): Promise<Plan> {
+    a.send({ type: 'ready' })
+    b.send({ type: 'ready' })
+    const [state] = await Promise.all([a.lastState(), b.lastState()])
+    return state.plan
+  }
+
+  it('the join snapshot carries a default plan', async () => {
+    const code = await newRoom()
+    const c = await openSocket(code)
+    c.send({ type: 'join', participantId: pid(1) })
+    expect((await c.take('room-state')).state.plan).toEqual(defaultPlan())
+  })
+
+  // Review Focus 1: nobody stays committed to a plan they did not see.
+  it('a plan change reaches both people and clears every ready flag', async () => {
+    const { a, b } = await pair()
+    const plan = await choose(a, b, 'duo2')
+    expect(plan).toMatchObject({ v: 1, stage: 'format', template: 'duo2', kinds: ['both', 'both'], takes: [[], []], kept: [null, null] })
+
+    a.send({ type: 'ready' })
+    expect((await a.lastState()).participants.a?.ready).toBe(true)
+    await b.settle()
+
+    b.send(act({ k: 'kind', cell: 0, kind: 'a' }))
+    const [sa, sb] = await Promise.all([a.lastState(), b.lastState()])
+    expect(sa.plan.kinds).toEqual(['a', 'both'])
+    expect(sb.plan).toEqual(sa.plan)
+    expect(sa.participants.a?.ready).toBe(false)
+  })
+
+  it('ignores ready until a template has been chosen', async () => {
+    const { a, b } = await pair()
+    a.send({ type: 'ready' })
+    b.send({ type: 'ready' })
+    await a.expectNone('capture-scheduled')
+    expect((await a.lastState()).participants.a?.ready).toBe(false)
+  })
+
+  it('both ready in the format stage locks the plan and schedules round 1', async () => {
+    const { a, b } = await pair()
+    await choose(a, b, 'duo2')
+    expect(await nextRound(a, b)).toBe(1)
+    a.send({ type: 'ready' }) // refused while a round is in flight, but it re-syncs the caller
+    expect((await a.lastState()).plan).toMatchObject({ stage: 'shoot', cell: 0, template: 'duo2' })
+  })
+
+  it('refuses plan actions while a round is in flight', async () => {
+    const { a, b } = await pair()
+    await choose(a, b)
+    await nextRound(a, b)
+    a.send(act({ k: 'reset' }))
+    const state = await a.lastState()
+    expect(state.phase).toBe('capture')
+    expect(state.plan).toMatchObject({ stage: 'shoot', template: 'duo2' })
+  })
+
+  it('records a take only once BOTH people report photo-complete', async () => {
+    const { a, b } = await pair()
+    await choose(a, b)
+    const round = await nextRound(a, b)
+    a.send({ type: 'photo-complete', round })
+    expect((await a.lastState()).plan.takes).toEqual([[], []])
+    b.send({ type: 'photo-complete', round })
+    const state = await a.lastState()
+    expect(state.plan).toMatchObject({ stage: 'shoot', takes: [[1], []] })
+  })
+
+  // Review Focus 3: a failed exchange records nothing and leaves the cell in `shoot`.
+  it('a round whose exchange times out records no take', async () => {
+    const { a, b, stub } = await pair()
+    await choose(a, b)
+    await nextRound(a, b)
+    await runInDurableObject(stub, (instance) => {
+      peek(instance).rec.captureAt = Date.now() - EXCHANGE_TIMEOUT_MS - 1
+    })
+    expect(await runDurableObjectAlarm(stub)).toBe(true)
+    const state = await a.lastState()
+    expect(state.phase).toBe('ready')
+    expect(state.plan).toMatchObject({ stage: 'shoot', takes: [[], []] })
+  })
+
+  it('the second take opens the pick with the latest preselected, and keep changes it for both', async () => {
+    const { a, b } = await pair()
+    await choose(a, b)
+    await shootTake(a, b)
+    const plan = await shootTake(a, b)
+    expect(plan).toMatchObject({ stage: 'pick', cell: 0, takes: [[1, 2], []], kept: [2, null] })
+
+    a.send(act({ k: 'keep', round: 1 }))
+    const [sa, sb] = await Promise.all([a.lastState(), b.lastState()])
+    expect(sa.plan.kept[0]).toBe(1)
+    expect(sb.plan).toEqual(sa.plan)
+  })
+
+  // Review Focus 4
+  it('refuses a keep for a round that is not a take, and converges when both keep at once', async () => {
+    const { a, b } = await pair()
+    await choose(a, b)
+    await shootTake(a, b)
+    await shootTake(a, b)
+
+    a.send(act({ k: 'keep', round: 99 }))
+    expect((await a.lastState()).plan.kept[0]).toBe(2) // unchanged
+    await b.settle()
+
+    a.send(act({ k: 'keep', round: 1 }))
+    b.send(act({ k: 'keep', round: 2 }))
+    const [sa, sb] = await Promise.all([a.lastState(), b.lastState()])
+    expect(sb.plan).toEqual(sa.plan)
+    expect([1, 2]).toContain(sa.plan.kept[0])
+  })
+
+  it('both ready in the pick stage moves to the next cell, then to done; ready in done is ignored', async () => {
+    const { a, b } = await pair()
+    await choose(a, b, 'duo2')
+    await shootTake(a, b)
+    await shootTake(a, b)
+    expect(await bothReady(a, b)).toMatchObject({ stage: 'shoot', cell: 1 })
+
+    await shootTake(a, b)
+    await shootTake(a, b)
+    expect(await bothReady(a, b)).toMatchObject({ stage: 'done', takes: [[1, 2], [3, 4]], kept: [2, 4] })
+
+    a.send({ type: 'ready' })
+    expect((await a.lastState()).participants.a?.ready).toBe(false)
+  })
+
+  it('one more take adds a third and is then refused', async () => {
+    const { a, b } = await pair()
+    await choose(a, b, 'polaroid')
+    await shootTake(a, b)
+    await shootTake(a, b)
+
+    a.send(act({ k: 'more' }))
+    expect((await a.lastState()).plan).toMatchObject({ stage: 'shoot', cell: 0 })
+    await b.settle()
+    const plan = await shootTake(a, b)
+    expect(plan).toMatchObject({ stage: 'pick', takes: [[1, 2, 3]], kept: [3] })
+
+    a.send(act({ k: 'more' }))
+    expect((await a.lastState()).plan.stage).toBe('pick')
+  })
+
+  it('retake drops one cell and comes back to done, not to the next cell', async () => {
+    const { a, b } = await pair()
+    await choose(a, b, 'duo2')
+    for (let i = 0; i < 2; i++) {
+      await shootTake(a, b)
+      await shootTake(a, b)
+      await bothReady(a, b)
+    }
+    a.send(act({ k: 'retake', cell: 1 }))
+    const [state] = await Promise.all([a.lastState(), b.lastState()])
+    expect(state.plan).toMatchObject({ stage: 'shoot', cell: 1, takes: [[1, 2], []], kept: [2, null] })
+
+    await shootTake(a, b)
+    await shootTake(a, b)
+    expect(await bothReady(a, b)).toMatchObject({ stage: 'done', takes: [[1, 2], [5, 6]], kept: [2, 6] })
+  })
+
+  it('reset keeps the template and kinds but clears the takes', async () => {
+    const { a, b } = await pair()
+    await choose(a, b, 'duo2')
+    a.send(act({ k: 'kind', cell: 0, kind: 'a' }))
+    await Promise.all([a.lastState(), b.lastState()])
+    await shootTake(a, b)
+
+    a.send(act({ k: 'reset' }))
+    const [state] = await Promise.all([a.lastState(), b.lastState()])
+    expect(state.plan).toMatchObject({ stage: 'format', template: 'duo2', kinds: ['a', 'both'], takes: [[], []], kept: [null, null] })
+  })
+
+  it('a person alone can reset (their photos may be gone), but nothing else', async () => {
+    const { a, b } = await pair()
+    await choose(a, b)
+    b.ws.close(1000, 'bye')
+    await a.take('partner-left')
+    await a.settle()
+
+    a.send(act({ k: 'kind', cell: 0, kind: 'a' }))
+    const refused = await a.lastState()
+    expect(refused.phase).toBe('waiting')
+    expect(refused.plan.v).toBe(1)
+
+    a.send(act({ k: 'reset' }))
+    expect((await a.lastState()).plan).toMatchObject({ v: 2, stage: 'format', template: 'duo2' })
+  })
+
+  it('the plan survives a partner leaving and reclaiming their slot', async () => {
+    const { code, a, b } = await pair()
+    await choose(a, b, 'grid4')
+    b.ws.close(1000, 'bye')
+    await a.take('partner-left')
+    const back = await openSocket(code)
+    back.send({ type: 'join', participantId: pid(2) })
+    expect((await back.take('room-state')).state.plan).toMatchObject({ template: 'grid4', stage: 'format' })
+  })
+
+  it('gives a room persisted before plans existed a default plan', async () => {
+    const code = await newRoom()
+    const stub = env.BOOTH_ROOM.getByName(code)
+    await joinAs(code, 1)
+    await runInDurableObject(stub, async (instance, state) => {
+      const rec = peek(instance).rec as { plan?: unknown }
+      delete rec.plan
+      await state.storage.put('room', rec)
+    })
+    await evictDurableObject(stub)
+    const c = await openSocket(code)
+    c.send({ type: 'join', participantId: pid(1) })
+    expect((await c.take('room-state')).state.plan).toEqual(defaultPlan())
+  })
+
+  it('closes a socket that sends a malformed plan action', async () => {
+    const { a } = await pair()
+    a.send({ type: 'plan', action: { k: 'template', template: 'nope' } })
+    expect((await a.take('error')).code).toBe('invalid-message')
+    expect(await a.waitClose()).toBe(4400)
   })
 })

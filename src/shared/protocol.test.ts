@@ -75,3 +75,29 @@ describe('otherSlot', () => {
     expect(otherSlot('b')).toBe('a')
   })
 })
+
+describe('parseClientMessage — plan', () => {
+  const accepted = [
+    { type: 'plan', action: { k: 'template', template: 'duo2' } },
+    { type: 'plan', action: { k: 'kind', cell: 1, kind: 'a' } },
+    { type: 'plan', action: { k: 'keep', round: 3 } },
+    { type: 'plan', action: { k: 'more' } },
+    { type: 'plan', action: { k: 'retake', cell: 0 } },
+    { type: 'plan', action: { k: 'reset' } },
+  ]
+  it.each(accepted)('accepts %j', (raw) => {
+    expect(parseClientMessage(raw)).toEqual(raw)
+  })
+
+  const rejected: Array<[string, unknown]> = [
+    ['no action', { type: 'plan' }],
+    ['unknown action', { type: 'plan', action: { k: 'explode' } }],
+    ['unknown template', { type: 'plan', action: { k: 'template', template: 'horizontal' } }],
+    ['extra key beside action', { type: 'plan', action: { k: 'reset' }, extra: 1 }],
+    ['extra key inside action', { type: 'plan', action: { k: 'reset', extra: 1 } }],
+    ['action is a string', { type: 'plan', action: 'reset' }],
+  ]
+  it.each(rejected)('rejects %s', (_name, raw) => {
+    expect(parseClientMessage(raw)).toBeNull()
+  })
+})

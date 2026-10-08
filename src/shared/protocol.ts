@@ -1,4 +1,5 @@
 import { MAX_CANDIDATE_CHARS, MAX_SDP_CHARS, MAX_WS_FRAME_BYTES } from './constants'
+import { parsePlanAction, type Plan, type PlanAction } from './plan'
 
 export type SlotName = 'a' | 'b'
 export const otherSlot = (slot: SlotName): SlotName => (slot === 'a' ? 'b' : 'a')
@@ -40,6 +41,7 @@ export interface RoomState {
   round: number
   captureAt: number | null
   participants: Record<SlotName, PState | null>
+  plan: Plan
 }
 export type ErrorCode =
   | 'invalid-message'
@@ -57,6 +59,7 @@ export type ClientMessage =
   | { type: 'answer'; answer: AnswerInit }
   | { type: 'ice-candidate'; candidate: IceCandidateInit }
   | { type: 'photo-complete'; round: number }
+  | { type: 'plan'; action: PlanAction }
   | { type: 'ping'; clientTime: number }
 
 export type ServerMessage =
@@ -127,6 +130,10 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
       return onlyKeys(raw, ['type', 'round']) && isRound(raw.round)
         ? { type: 'photo-complete', round: raw.round }
         : null
+    case 'plan': {
+      const action = onlyKeys(raw, ['type', 'action']) ? parsePlanAction(raw.action) : null
+      return action ? { type: 'plan', action } : null
+    }
     case 'ping':
       return onlyKeys(raw, ['type', 'clientTime']) &&
         typeof raw.clientTime === 'number' &&
