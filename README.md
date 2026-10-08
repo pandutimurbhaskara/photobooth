@@ -60,7 +60,9 @@ deliberately **not** used: photos never leave the browsers.
 
 ### TURN (optional)
 
-Without TURN the app uses STUN only, which connects most home networks directly but fails on strict NATs.
+Without TURN the app uses STUN only, which connects most home networks directly but fails on strict NATs. **Treat TURN as
+effectively required for the headline use case:** two phones on different mobile carriers usually sit behind
+carrier-grade NAT, where STUN-only often fails.
 
 1. Create a Cloudflare Realtime TURN key.
 2. Put its id in `wrangler.jsonc` under `vars.TURN_KEY_ID`.
@@ -69,6 +71,10 @@ Without TURN the app uses STUN only, which connects most home networks directly 
 The browser only ever receives short-lived credentials minted by `/api/ice`; no long-lived secret reaches a client.
 With TURN configured, media can be relayed (still end-to-end encrypted by DTLS-SRTP), which is why the privacy copy
 says "directly **when possible**".
+
+Because every credential costs relay bandwidth, `/api/ice` only answers same-site callers who are actually in the room
+(by their participant id), at most 30 per room per hour, on top of the per-IP limit. A leaked room code cannot drain
+your allowance, but set a billing alert on your Cloudflare account anyway.
 
 ## How synchronization works
 
@@ -83,7 +89,12 @@ sends it to both.
 3. **The 3-2-1 is cosmetic.** The numerals are derived from the same timestamp every frame; the capture never waits
    for the animation.
 4. **A repeated or very late message** (a replay after reconnecting, a stalled phone) captures once, or — if more than
-   1.5 s late — shows MISSED IT instead of taking a late photo.
+   1.5 s late — shows MISSED IT instead of taking a late photo. The same goes for a page that was throttled or
+   suspended (a backgrounded tab): if the timer fires more than 1.5 s after the shared moment, that is MISSED IT, not a
+   "simultaneous" photo taken whenever the tab woke up.
+5. **A round that does not complete** (a missed shot, a slow or broken partner) is ended by the server 30 s after
+   `captureAt` with an alarm; both people see a clear "THAT ROUND DIDN'T WORK. GO AGAIN." and can press ready again. It
+   is deliberately not reported as a network failure.
 
 **Honest accuracy:** the two captures land within roughly **one to three camera frames** — clock error (≤ half the
 RTT of the best sample) + timer granularity (≤ 16 ms) + the camera's own frame interval (~33 ms at 30 fps). It is
@@ -107,7 +118,12 @@ capture, on the result screen only (there is no live filtered preview).
   every WebSocket frame is validated strictly and size-capped; the WebSocket upgrade checks the `Origin` host.
 - `public/_headers` sets a strict CSP (no inline scripts), `Permissions-Policy: camera=(self)`, `nosniff`,
   `Referrer-Policy: no-referrer`.
-- Photos are held only in the browser tab. Leaving the page (or pressing EXIT) after capturing asks first.
+- Photos are held only in the browser tab. Closing the tab or pressing EXIT after capturing asks first. A finished strip
+  is never hidden behind a failure screen (call dropped, socket closed, camera lost): only a round in flight takes the
+  screen back.
+- Connection health: the client sends a raw `ka` every 20 s which the runtime answers with `ok` without waking the room;
+  50 s of silence is treated as a dead (half-open) socket and reconnects. A muted or ended camera track is never captured,
+  and a lost camera shows the "no camera" screen with TRY AGAIN instead of a frozen preview.
 
 ## Decisions and limits
 
@@ -146,15 +162,15 @@ Nothing was pushed or deployed.
 | Lint, fix all errors | **verified here** | `npm run lint` exits 0 |
 | Imports | **verified here** | covered by `tsc -b` and the production build |
 | Cloudflare bindings | **verified here** | `wrangler types` generates `BOOTH_ROOM`, `RL_CREATE`, `RL_LOOKUP`, `ASSETS`; worker tests exercise every binding; build output keeps the Durable Object `exports` |
-| Durable Object behaviour (workerd) | **verified here** | 47 worker tests: join/reclaim/full/leave, relay, ping, rate limit, expiry alarm, hibernation, ready/capture scheduling |
+| Durable Object behaviour (workerd) | **verified here** | 55 worker tests: join/reclaim/full/leave, relay, ping, rate limit, expiry and capture-timeout alarms, hibernation, keepalive, ready/capture scheduling, ICE gating |
 | Durable Object **deployment** | **not done** | needs `wrangler login` + `wrangler deploy` (interactive, publishes outward) |
 | WebSocket connections | **verified here** | worker tests + every e2e spec |
-| Two browsers simultaneously | **verified here** | 26 Playwright tests, two or three isolated Chromium contexts each |
+| Two browsers simultaneously | **verified here** | 29 Playwright tests, two or three isolated Chromium contexts each |
 | Synchronized capture | **verified here** | e2e: capture spread < 150 ms on one machine, repeated 10× with 0 failures. Real-device accuracy: checklist row 1 |
 | Photo generation | **verified here** | strip 1056×1800 / 2064×1032 / 2064×1800 asserted; B&W filter verified by pixel sampling |
 | Download | **verified here** | PNG and JPG download events with the expected file names. File contents on real phones: row 8 |
 | Camera permissions | **verified here (simulated)** | blocked / no camera / no camera API screens via a stubbed `getUserMedia`. Real browser permission prompts: row 2 |
-| Disconnect / reconnect | **verified here** | partner leaves mid-countdown, reload rejoins a full booth, second tab replaces the first, socket backoff unit-tested. Real network switch: row 5 |
+| Disconnect / reconnect | **verified here** | partner leaves mid-countdown, reload rejoins a full booth, second tab replaces the first, a partner whose call dies while their socket stays open (the strip stays downloadable), a capture message delivered 7 s late (MISSED IT, then the round recovers for both), socket backoff and keepalive unit-tested. Real network switch / locked phone: rows 4, 5 |
 | Mobile layout | **verified here (emulated)** | 390×844 Chromium: no sideways scroll, READY ≥ 48 px and on screen. Real phones: rows 1, 8 |
 | Desktop layout | **verified here** | default desktop Chromium viewport |
 | Reduced motion | **verified here** | animation duration forced to ~0 with the preference, > 50 ms without |
@@ -164,7 +180,7 @@ Nothing was pushed or deployed.
 | iPhone Safari, Android Chrome, Firefox, desktop Safari | **needs your device** | rows 1, 6, 8 |
 | Real TURN | **needs your device** | row 10 and a Cloudflare TURN key |
 
-Test counts: **221** unit + worker tests across 17 files; **26** end-to-end tests across 7 spec files.
+Test counts: **239** unit + worker tests across 17 files; **29** end-to-end tests across 8 spec files.
 
 **Known issues and notes**
 
@@ -176,3 +192,23 @@ Test counts: **221** unit + worker tests across 17 files; **26** end-to-end test
   Wrangler; do not use `npm audit fix --force` blindly.
 - The camera cannot be flipped in e2e (Chromium's fake device exposes a single camera): FLIP CAMERA is
   device-checklist row 3.
+- The first-run failure above is unexplained. One hypothesis (not confirmed): macOS 15's one-time Local Network privacy
+  prompt for a newly installed Chromium stalling ICE/mDNS candidates past the 15 s poll.
+
+**Deferred from the final code review** (known, graded Minor, not fixed — details in the review notes):
+
+- Clock sync keeps the lowest-RTT sample for 12 samples, so a wall-clock step while an old best sample is still in the
+  window skews the offset until it ages out (use a monotonic clock for RTT).
+- A stale answer arriving after a peer rebuild throws and flips the call to "failed" (add an offer id to the answer).
+  Early ICE candidates that arrive before their offer, and offers/answers sent while the socket is not open, are dropped
+  silently.
+- A hostile partner can send zero-length data-channel chunks (unbounded count) or a tiny JPEG with enormous declared
+  dimensions (decode bomb) to stall *your* tab; one corrupt partner image also disables DOWNLOAD for the whole strip.
+- The side whose socket blipped does not cancel its own countdown when the server cancels the round.
+- A room expires an hour after the last ready/signal message even while two people are still on video.
+- "CAMERA NEEDS HTTPS" is also what in-app browsers (WhatsApp, LINE, Instagram) show; pasting a URL followed by
+  punctuation is rejected; the strip date is render time, not capture time.
+- A failure *during a second round* shows the full-screen error whose exit links skip the "leave without saving?" prompt.
+- Cosmetic: the desktop lobby's oversized room code wraps onto two lines, and on a phone the sticky BOTH READY card
+  covers the lower half of your own preview until you scroll.
+- Room codes are ~29.7 bits and the lookup is a 200/404 oracle (owner-accepted); use 8 characters before a public launch.
