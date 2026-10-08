@@ -68,8 +68,14 @@ export function createCaptureScheduler(deps: CaptureDeps) {
       const fire = (): void => {
         frame = null
         const at = deps.now()
-        if (at >= captureAt) onCapture(round, at)
-        else frame = deps.nextFrame(fire)
+        if (at < captureAt) {
+          frame = deps.nextFrame(fire)
+          return
+        }
+        // A throttled or suspended tab can wake long after the shared moment; a photo taken then would be
+        // exchanged as if it were simultaneous, so report it as missed instead.
+        if (at - captureAt > LATE_GRACE_MS) onMissed(round)
+        else onCapture(round, at)
       }
       timer = deps.setTimer(() => {
         timer = null

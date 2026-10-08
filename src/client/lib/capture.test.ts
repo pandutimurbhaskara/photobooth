@@ -106,6 +106,28 @@ describe('createCaptureScheduler', () => {
     expect(scheduler.schedule(7, 8_400, () => captured++, () => {})).toBe(false)
   })
 
+  // Final review I2: a backgrounded tab throttles timers and rAF, so the timer can fire long after captureAt.
+  it('reports MISSED instead of capturing when the timer itself fires far too late (tab was throttled or suspended)', () => {
+    const clock = new FakeClock()
+    const captured: number[] = []
+    const missed: number[] = []
+    const scheduler = createCaptureScheduler(clock.deps)
+    scheduler.schedule(1, 4500, (_r, at) => captured.push(at), (r) => missed.push(r))
+    clock.advance(20_000, 20_000) // one giant step: nothing ran until 15.5 s after the shared moment
+    expect(captured).toEqual([])
+    expect(missed).toEqual([1])
+  })
+
+  it('still captures when the timer is only a little late (within the grace period)', () => {
+    const clock = new FakeClock()
+    const captured: number[] = []
+    const missed: number[] = []
+    createCaptureScheduler(clock.deps).schedule(1, 4500, (_r, at) => captured.push(at), (r) => missed.push(r))
+    clock.advance(5500, 5500) // runs 1000 ms after captureAt
+    expect(captured).toHaveLength(1)
+    expect(missed).toEqual([])
+  })
+
   it('cancel() stops a pending capture, and later rounds still work', () => {
     const clock = new FakeClock()
     const rounds: number[] = []
