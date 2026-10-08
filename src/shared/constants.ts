@@ -49,4 +49,9 @@ export const PHOTO_MAX_BYTES = 3 * 1024 * 1024
 export const CHUNK_BYTES = 16 * 1024
 export const CELL_ASPECT = 4 / 3
 
+// Format & takes (spec D24–D28)
+export const MIN_TAKES = 2
+export const MAX_TAKES = 3
+export const MAX_CELLS = 4
+
 export const DEFAULT_STUN = 'stun:stun.cloudflare.com:3478'
